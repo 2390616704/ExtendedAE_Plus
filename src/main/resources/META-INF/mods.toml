@@ -1,0 +1,45 @@
+modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "LGPL-3.0-or-later"
+
+[[mods]]
+modId = "extendedae_plus"
+displayURL="https://github.com/GaLicn/ExtendedAE_Plus"
+issueTrackerURL = "https://github.com/GaLicn/ExtendedAE_Plus/issues"
+version = "${version}"
+displayName = "ExtendedAE Plus"
+credits = "C-H716 for Code Contribution"
+authors = "GaLi"
+description = "Add more practical features and auxiliary operations to the Applied Energistics 2 mod."
+logoFile = "extendedae_plus.png"
+
+[[dependencies.extendedae_plus]]
+modId = "forge"
+mandatory = true
+versionRange = "[47,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.extendedae_plus]]
+modId = "minecraft"
+mandatory = true
+versionRange = "[1.20.1,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.extendedae_plus]]
+modId = "expatternprovider"
+mandatory = true
+versionRange = "[1.20-1.4.6-forge,)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.extendedae_plus]]
+modId = "mae2"
+mandatory = false
+versionRange = "[2.0.0-alpha,)"
+ordering = "NONE"
+side = "BOTH"
+
+[[mixins]]
+config = "extendedae_plus.mixins.json"

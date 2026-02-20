@@ -1,0 +1,194 @@
+plugins {
+    id 'dev.architectury.loom' version '1.11.444'
+    id 'maven-publish'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = project.maven_group
+version = project.mod_version
+
+base {
+    archivesName = project.archives_name
+}
+
+sourceSets {
+    main {
+        resources {
+            srcDir 'src/generated/resources'
+        }
+    }
+}
+
+loom {
+    silentMojangMappingsLicense()
+
+    forge {
+        mixinConfig 'extendedae_plus.mixins.json'
+    }
+
+    runs {
+        data {
+            data()
+            name "Data Generation"
+            // IDE 启动时传入参数
+            programArgs.addAll(
+                    '--mod', project.name, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
+            )
+        }
+    }
+}
+
+repositories {
+    flatDir {
+        dirs 'libs'
+    }
+    mavenLocal()
+    maven { url "https://maven.aliyun.com/repository/public" }
+    mavenCentral()
+    maven {
+        url = "https://cursemaven.com"
+        content {
+            includeGroup "curse.maven"
+        }
+    }
+    maven {
+        url = "https://maven.blamejared.com/"
+    }
+    maven {
+        url = "https://dvs1.progwml6.com/files/maven/"
+    }
+    maven {
+        name = "Modmaven"
+        url = "https://modmaven.dev/"
+    }
+    maven {
+        url "https://maven.shedaniel.me/"
+        content {
+            includeGroup "me.shedaniel"
+            includeGroup "me.shedaniel.cloth"
+            includeGroup "dev.architectury"
+        }
+    }
+    maven { url "https://repo.spongepowered.org/maven" }
+    maven { url "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/" }
+}
+
+dependencies {
+    minecraft "net.minecraft:minecraft:${minecraft_version}"
+    mappings loom.officialMojangMappings()
+    forge "net.minecraftforge:forge:${forge_version}"
+    annotationProcessor "org.spongepowered:mixin:${mixin_version}:processor"
+
+    //exendedae前置
+    modImplementation "curse.maven:glodium-957920:${glodium_version}"
+    //extendedAE
+    modImplementation "curse.maven:ex-pattern-provider-892005:7005572"
+
+    //ae2
+    modImplementation "appeng:appliedenergistics2-forge:${ae2_version}"
+    modImplementation "org.appliedenergistics:guideme:${guideme_version}"
+    modImplementation "curse.maven:applied-energistics-2-wireless-terminals-459929:${wireless_terminals_version}"
+    modImplementation "curse.maven:applied-flux-965012:7072853"
+    modImplementation "curse.maven:mega-cells-622112:${mega_cells_version}"
+
+    //mae2
+    modRuntimeOnly "curse.maven:modern-ae2-additions-1028068:6827727"
+    modCompileOnly "curse.maven:modern-ae2-additions-1028068:6827727"
+
+    //aea
+    modCompileOnly "curse.maven:advancedae-1084104:6939473"
+    modRuntimeOnly "curse.maven:advancedae-1084104:6939473"
+
+    modCompileOnly "mezz.jei:jei-${minecraft_version}-forge:${jei_version}"
+    modRuntimeOnly "mezz.jei:jei-${minecraft_version}-forge:15.20.0.112"
+    modImplementation "mezz.jei:jei-${minecraft_version}-forge:${jei_version}"
+    modImplementation "curse.maven:jade-324717:${jade_version}"
+
+    // GregTech
+    modCompileOnly "curse.maven:gregtechceu-modern-890405:${gregtech_version}"
+    modCompileOnly "curse.maven:ldlib-626676:${ldlib_version}"
+
+    //curios
+    modImplementation "curse.maven:curios-309927:${curios_version}"
+
+    // Runtime test
+    modRuntimeOnly "dev.architectury:architectury-forge:9.2.14"
+    modRuntimeOnly "curse.maven:cloth-config-348521:5729105"
+
+    //jec
+    modImplementation "curse.maven:just-enough-characters-250702:6680042"
+
+    //geckolib
+    modRuntimeOnly "curse.maven:geckolib-388172:6920925"
+    //mclib运行时
+    forgeRuntimeLibrary "com.eliotlash.mclib:mclib:20"
+
+    // compileOnly 供代码编译
+    include "curse.maven:configuration-444699:4710266"
+    modImplementation "curse.maven:configuration-444699:4710266"
+
+    //ftbteams
+    modCompileOnly "curse.maven:ftb-teams-forge-404468:6130786"
+    modCompileOnly "curse.maven:ftb-library-forge-404465:6807424"
+    modRuntimeOnly "curse.maven:ftb-teams-forge-404468:6130786"
+    modRuntimeOnly "curse.maven:ftb-library-forge-404465:6807424"
+}
+
+compileJava {
+    options.compilerArgs += ['-Xlint:-deprecation', '-Xlint:-removal', '-Xlint:-unchecked']
+}
+
+processResources {
+    inputs.property 'version', project.version
+
+    filesMatching('META-INF/mods.toml') {
+        expand version: project.version
+    }
+}
+
+java {
+    // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
+    // if it is present.
+    // If you remove this line, sources will not be generated.
+    withSourcesJar()
+
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+// 将 LICENSE 打包进发布的 jar
+tasks.named('jar', Jar).configure {
+    from('.') {
+        include 'LICENSE'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 17
+}
+
+// Configure Maven publishing.
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            pom {
+                licenses {
+                    license {
+                        name = 'GNU Lesser General Public License v3.0'
+                        url = 'https://www.gnu.org/licenses/lgpl-3.0.en.html'
+                        distribution = 'repo'
+                    }
+                }
+            }
+        }
+    }
+
+    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
+    repositories {
+        // Add repositories to publish to here.
+        // Notice: This block does NOT have the same function as the block in the top level.
+        // The repositories here will be used for publishing your artifact, not for
+        // retrieving dependencies.
+    }
+}

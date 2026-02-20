@@ -1,0 +1,15 @@
+pluginManagement {
+    repositories {
+        maven { url "https://maven.aliyun.com/repository/gradle-plugin" }
+        maven {
+            url "https://maven.architectury.dev/"
+            allowInsecureProtocol = false
+        }
+        maven { url "https://maven.aliyun.com/repository/public" }
+        maven { url "https://maven.fabricmc.net/" }
+        maven { url "https://files.minecraftforge.net/maven/" }
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'extendedae_plus'

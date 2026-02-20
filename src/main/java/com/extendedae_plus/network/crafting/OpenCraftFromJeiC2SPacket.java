@@ -1,0 +1,147 @@
+package com.extendedae_plus.network.crafting;
+
+import appeng.api.networking.IGrid;
+import appeng.api.stacks.AEKey;
+import appeng.api.stacks.GenericStack;
+import appeng.client.gui.me.common.MEStorageScreen;
+import appeng.items.tools.powered.WirelessTerminalItem;
+import appeng.menu.locator.MenuLocators;
+import appeng.menu.me.crafting.CraftAmountMenu;
+import com.extendedae_plus.menu.locator.CuriosItemLocator;
+import com.extendedae_plus.mixin.ae2.accessor.MEStorageScreenAccessor;
+import com.extendedae_plus.mixin.extendedae.accessor.GuiExPatternTerminalAccessor;
+import com.extendedae_plus.util.wireless.WirelessTerminalLocator;
+import com.glodblock.github.extendedae.client.gui.GuiExPatternTerminal;
+import de.mari_023.ae2wtlib.wut.WUTHandler;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.network.NetworkEvent;
+
+import java.util.function.Supplier;
+
+/**
+ * C2S：从 JEI 中键点击请求打开 AE 的下单界面。
+ * 负载为一个 GenericStack（物品或流体）。
+ */
+public class OpenCraftFromJeiC2SPacket {
+    private final GenericStack stack;
+
+    public OpenCraftFromJeiC2SPacket(GenericStack stack) {
+        this.stack = stack;
+    }
+
+    public static void encode(OpenCraftFromJeiC2SPacket msg, FriendlyByteBuf buf) {
+        GenericStack.writeBuffer(msg.stack, buf);
+    }
+
+    public static OpenCraftFromJeiC2SPacket decode(FriendlyByteBuf buf) {
+        var gs = GenericStack.readBuffer(buf);
+        return new OpenCraftFromJeiC2SPacket(gs);
+    }
+
+    public static void handle(OpenCraftFromJeiC2SPacket msg, Supplier<NetworkEvent.Context> ctx) {
+        var context = ctx.get();
+        context.enqueueWork(() -> {
+            ServerPlayer player = context.getSender();
+            if (player == null || msg.stack == null) return;
+
+            // 仅支持 AEKey 为可合成的种类
+            AEKey what = msg.stack.what();
+
+            // 定位无线终端
+            var located = WirelessTerminalLocator.find(player);
+            if (located.isEmpty()) return;
+
+            // 若为 Curios 槽位：跳过 AE2 基类的距离/电量前置校验，直接打开数量界面，
+            // 让菜单与宿主（WirelessTerminalMenuHost）以及 ae2wtlib 自身处理量子卡跨维/跨距逻辑。
+            String curiosSlotId = located.getCuriosSlotId();
+            int curiosIndex = located.getCuriosIndex();
+            if (curiosSlotId != null && curiosIndex >= 0) {
+                // Curios 也需要先检查是否可合成，否则写入搜索框并返回
+                var craftingService = (appeng.api.networking.crafting.ICraftingService) null;
+                try {
+                    String current = WUTHandler.getCurrentTerminal(located.stack);
+                    var def = WUTHandler.wirelessTerminals.get(current);
+                    var wtHost = def == null ? null : def.wTMenuHostFactory().create(player, null, located.stack, (p, sub) -> {});
+                    var node = wtHost == null ? null : wtHost.getActionableNode();
+                    var grid = node == null ? null : node.getGrid();
+                    craftingService = grid == null ? null : grid.getCraftingService();
+                } catch (Throwable ignored) {
+                }
+
+                if (craftingService != null && !craftingService.isCraftable(what)) {
+                    String name = what.getDisplayName().getString();
+                    if (name == null || name.isEmpty()) return;
+
+                    var screen = Minecraft.getInstance().screen;
+                    if (screen instanceof MEStorageScreen<?> me) {
+                        try {
+                            MEStorageScreenAccessor acc = (MEStorageScreenAccessor) me;
+                            acc.eap$getSearchField().setValue(name);
+                            acc.eap$setSearchText(name);
+                        } catch (Throwable ignored) {
+                        }
+                    } else if (screen instanceof GuiExPatternTerminal<?> gpt) {
+                        try {
+                            GuiExPatternTerminalAccessor acc = (GuiExPatternTerminalAccessor) gpt;
+                            acc.getSearchOutField().setValue(name);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                    return;
+                }
+
+                int initial = 1;
+                CraftAmountMenu.open(player, new CuriosItemLocator(curiosSlotId, curiosIndex), what, initial);
+                return;
+            }
+
+            // 非 Curios（主手/副手/背包）仍按原先流程做前置校验，保持行为一致。
+            if (!(located.stack.getItem() instanceof WirelessTerminalItem wt)) return;
+
+            // 基本前置校验：联网、电量
+            IGrid grid = wt.getLinkedGrid(located.stack, player.level(), player);
+            if (grid == null) return;
+            if (!wt.hasPower(player, 0.5, located.stack)) return;
+
+            // 该 Key 是否可被网络自动合成
+            var craftingService = grid.getCraftingService();
+            if (!craftingService.isCraftable(what)){
+                String name=what.getDisplayName().getString();
+                if (name == null || name.isEmpty()) return;
+
+                // 写入 AE2 终端的搜索框
+                var screen = Minecraft.getInstance().screen;
+                if (screen instanceof MEStorageScreen<?> me) {
+                    try {
+                        MEStorageScreenAccessor acc = (MEStorageScreenAccessor) me;
+                        acc.eap$getSearchField().setValue(name);
+                        acc.eap$setSearchText(name); // 同步到 Repo 并刷新
+                    } catch (Throwable ignored) {
+                    }
+                }else if (screen instanceof GuiExPatternTerminal<?> gpt) {
+                    try {
+                        GuiExPatternTerminalAccessor acc = (GuiExPatternTerminalAccessor) gpt;
+                        acc.getSearchOutField().setValue(name);
+                    }catch (Throwable ignored) {}
+                }
+                return;
+            }
+
+            var hand = located.getHand();
+            int slot = located.getSlotIndex();
+            if (hand != null) {
+                int initial = 1;
+                CraftAmountMenu.open(player, MenuLocators.forHand(player, hand), what, initial);
+            } else if (slot >= 0) {
+                // 直接基于物品槽位作为菜单宿主打开数量输入界面
+                int initial = 1; // 初始数量，避免依赖具体 Key 的单位定义
+                CraftAmountMenu.open(player, MenuLocators.forInventorySlot(slot), what, initial);
+            } else {
+                // 未知宿主（回退忽略）
+            }
+        });
+        context.setPacketHandled(true);
+    }
+}

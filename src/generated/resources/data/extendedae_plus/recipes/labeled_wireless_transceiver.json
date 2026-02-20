@@ -1,0 +1,24 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "A": {
+      "item": "minecraft:paper"
+    },
+    "B": {
+      "item": "extendedae_plus:wireless_transceiver"
+    },
+    "C": {
+      "item": "minecraft:emerald"
+    }
+  },
+  "pattern": [
+    "CAC",
+    "ABA",
+    "CAC"
+  ],
+  "result": {
+    "item": "extendedae_plus:labeled_wireless_transceiver"
+  },
+  "show_notification": true
+}
