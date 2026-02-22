@@ -116,16 +116,23 @@ public class CreateCtrlQPatternC2SPacket {
 
             LOGGER.info("[CtrlQPattern] Pattern created successfully");
 
-            // 4. 总是掉落到玩家脚下
-            player.drop(pattern, false);
-            LOGGER.info("[CtrlQPattern] Pattern dropped at player feet");
+            // 4. 根据样板类型选择交付方式
+            if (msg.isCraftingPattern) {
+                // 合成样板：始终掉落到玩家脚下
+                player.drop(pattern, false);
+                LOGGER.info("[CtrlQPattern] Crafting pattern dropped at player feet");
+            } else {
+                // 处理样板：优先放入背包，满了再掉落
+                boolean added = player.getInventory().add(pattern);
+                if (added) {
+                    LOGGER.info("[CtrlQPattern] Processing pattern added to inventory");
+                } else {
+                    player.drop(pattern, false);
+                    LOGGER.info("[CtrlQPattern] Processing pattern dropped (inventory full)");
+                }
+            }
 
-            // 5. 成功消息
-            player.displayClientMessage(
-                Component.translatable("message.extendedae_plus.pattern_created",
-                    recipe.getResultItem(player.level().registryAccess()).getHoverName()),
-                false
-            );
+            // 5. 移除成功消息（仅失败时提示）
         });
         ctx.setPacketHandled(true);
     }
@@ -163,40 +170,76 @@ public class CreateCtrlQPatternC2SPacket {
      */
     private static ItemStack createPattern(Recipe<?> recipe, boolean isCrafting, List<ItemStack> selectedIngredients, ServerPlayer player) {
         try {
-            List<GenericStack> inputs = new ArrayList<>();
-            List<GenericStack> outputs = new ArrayList<>();
+            if (isCrafting && recipe instanceof CraftingRecipe craftingRecipe) {
+                // ===== 合成样板创建路径 =====
+                LOGGER.info("[CtrlQPattern] Creating crafting pattern for recipe: {}", recipe.getId());
 
-            // 处理输入 - 使用客户端传入的材料选择
-            for (ItemStack item : selectedIngredients) {
-                if (!item.isEmpty()) {
-                    inputs.add(new GenericStack(
-                        AEItemKey.of(item),
-                        item.getCount()
-                    ));
-                    LOGGER.debug("[CtrlQPattern] Input: {} x{}", item.getItem(), item.getCount());
+                // 准备9格工作台输入（3x3布局）
+                ItemStack[] inputs = new ItemStack[9];
+                for (int i = 0; i < 9; i++) {
+                    if (i < selectedIngredients.size()) {
+                        inputs[i] = selectedIngredients.get(i).copy();
+                    } else {
+                        inputs[i] = ItemStack.EMPTY;
+                    }
+                    LOGGER.debug("[CtrlQPattern] Crafting input[{}]: {}", i,
+                        inputs[i].isEmpty() ? "EMPTY" : inputs[i].getItem());
                 }
+
+                // 准备输出
+                ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
+                LOGGER.debug("[CtrlQPattern] Crafting output: {} x{}", output.getItem(), output.getCount());
+
+                // 使用 encodeCraftingPattern 创建合成样板
+                // 直接传递 CraftingRecipe 对象而非 RecipeHolder
+                ItemStack encodedPattern = PatternDetailsHelper.encodeCraftingPattern(
+                    craftingRecipe,
+                    inputs,
+                    output,
+                    true,  // allowSubstitutes - 允许替代材料
+                    false  // allowFluidSubstitutes - 不允许流体替代
+                );
+
+                LOGGER.info("[CtrlQPattern] Crafting pattern encoded successfully");
+                return encodedPattern;
+
+            } else {
+                // ===== 处理样板创建路径 =====
+                LOGGER.info("[CtrlQPattern] Creating processing pattern for recipe: {}", recipe.getId());
+
+                List<GenericStack> inputs = new ArrayList<>();
+                List<GenericStack> outputs = new ArrayList<>();
+
+                // 处理输入 - 使用客户端传入的材料选择
+                for (ItemStack item : selectedIngredients) {
+                    if (!item.isEmpty()) {
+                        inputs.add(new GenericStack(
+                            AEItemKey.of(item),
+                            item.getCount()
+                        ));
+                        LOGGER.debug("[CtrlQPattern] Processing input: {} x{}", item.getItem(), item.getCount());
+                    }
+                }
+
+                // 处理输出
+                ItemStack result = recipe.getResultItem(player.level().registryAccess());
+                if (!result.isEmpty()) {
+                    outputs.add(new GenericStack(
+                        AEItemKey.of(result),
+                        result.getCount()
+                    ));
+                    LOGGER.debug("[CtrlQPattern] Processing output: {} x{}", result.getItem(), result.getCount());
+                }
+
+                // 使用 encodeProcessingPattern 创建处理样板
+                ItemStack encodedPattern = PatternDetailsHelper.encodeProcessingPattern(
+                    inputs.toArray(new GenericStack[0]),
+                    outputs.toArray(new GenericStack[0])
+                );
+
+                LOGGER.info("[CtrlQPattern] Processing pattern encoded successfully");
+                return encodedPattern;
             }
-
-            // 处理输出
-            ItemStack result = recipe.getResultItem(player.level().registryAccess());
-            if (!result.isEmpty()) {
-                outputs.add(new GenericStack(
-                    AEItemKey.of(result),
-                    result.getCount()
-                ));
-                LOGGER.debug("[CtrlQPattern] Output: {} x{}", result.getItem(), result.getCount());
-            }
-
-            // 使用AE2官方API创建样板
-            // 注意：AE2可能没有专门的encodeCraftingPattern方法
-            // 处理样板也能在合成单元中工作，所以统一使用encodeProcessingPattern
-            ItemStack encodedPattern = PatternDetailsHelper.encodeProcessingPattern(
-                inputs.toArray(new GenericStack[0]),
-                outputs.toArray(new GenericStack[0])
-            );
-
-            LOGGER.info("[CtrlQPattern] Pattern encoded successfully (isCrafting: {})", isCrafting);
-            return encodedPattern;
 
         } catch (Exception e) {
             LOGGER.error("[CtrlQPattern] Exception during pattern creation", e);

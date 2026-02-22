@@ -3,6 +3,7 @@ package com.extendedae_plus.client;
 import com.extendedae_plus.ExtendedAEPlus;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ModelEvent;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -23,5 +24,11 @@ public final class ClientModelEvents {
         event.register(ExtendedAEPlus.id("block/crafting/256x_accelerator_formed_v2"));
         event.register(ExtendedAEPlus.id("block/crafting/1024x_accelerator_formed_v2"));
         ClientRegistrar.initBuiltInModels();
+    }
+
+    @SubscribeEvent
+    public static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
+        // 注册所有快捷键
+        ModKeybindings.register(event);
     }
 }

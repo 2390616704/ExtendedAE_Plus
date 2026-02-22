@@ -234,5 +234,8 @@
   "message.extendedae_plus.no_blank_pattern": "No blank pattern in inventory",
   "message.extendedae_plus.recipe_not_found": "Recipe not found",
   "message.extendedae_plus.pattern_creation_failed": "Pattern creation failed",
-  "message.extendedae_plus.pattern_created": "Created pattern: %s"
+  "message.extendedae_plus.pattern_created": "Created pattern: %s",
+
+  "key.extendedae_plus.create_pattern": "Create Pattern from JEI",
+  "key.categories.extendedae_plus": "ExtendedAE Plus"
 }

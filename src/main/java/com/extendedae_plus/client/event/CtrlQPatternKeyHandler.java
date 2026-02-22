@@ -3,6 +3,7 @@ package com.extendedae_plus.client.event;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
 import com.extendedae_plus.ExtendedAEPlus;
+import com.extendedae_plus.client.ModKeybindings;
 import com.extendedae_plus.init.ModNetwork;
 import com.extendedae_plus.integration.jei.JeiRuntimeProxy;
 import com.extendedae_plus.network.pattern.CreateCtrlQPatternC2SPacket;
@@ -44,12 +45,18 @@ public class CtrlQPatternKeyHandler {
     public static void onScreenKeyPressed(ScreenEvent.KeyPressed event) {
         Screen screen = event.getScreen();
         int keyCode = event.getKeyCode();
+        int scanCode = event.getScanCode();
 
-        LOGGER.debug("[CtrlQKeyHandler] ScreenEvent.KeyPressed - key={}, screen={}", keyCode,
-            screen != null ? screen.getClass().getSimpleName() : "null");
+        LOGGER.debug("[CtrlQKeyHandler] ScreenEvent.KeyPressed - key={}, scanCode={}, screen={}",
+            keyCode, scanCode, screen != null ? screen.getClass().getSimpleName() : "null");
 
-        // 检查是否是 Ctrl+Q 组合键（Q = 81, 必须按住Ctrl）
-        if (keyCode != 81 || !Screen.hasControlDown()) {
+        // 使用 KeyMapping 检测按键（而非硬编码）
+        if (!ModKeybindings.CREATE_PATTERN_KEY.matches(keyCode, scanCode)) {
+            return;
+        }
+
+        // 检查 Ctrl 修饰键
+        if (!Screen.hasControlDown()) {
             return;
         }
 
