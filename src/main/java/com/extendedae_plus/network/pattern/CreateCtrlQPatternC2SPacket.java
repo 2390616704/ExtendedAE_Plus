@@ -68,9 +68,6 @@ public class CreateCtrlQPatternC2SPacket {
                 return;
             }
 
-            LOGGER.info("[CtrlQPattern] Processing pattern creation request from player: {}", player.getName().getString());
-            LOGGER.info("[CtrlQPattern] Recipe ID: {}, IsCrafting: {}, Ingredients: {}",
-                msg.recipeId, msg.isCraftingPattern, msg.selectedIngredients.size());
 
             // 1. 验证配方存在
             RecipeManager recipeManager = player.level().getRecipeManager();
@@ -86,7 +83,6 @@ public class CreateCtrlQPatternC2SPacket {
             }
 
             Recipe<?> recipe = recipeOpt.get();
-            LOGGER.info("[CtrlQPattern] Recipe found: {}", recipe.getId());
 
             // 2. 消耗空白样板
             if (!consumeBlankPattern(player)) {
@@ -97,8 +93,6 @@ public class CreateCtrlQPatternC2SPacket {
                 );
                 return;
             }
-
-            LOGGER.info("[CtrlQPattern] Blank pattern consumed");
 
             // 3. 创建样板
             ItemStack pattern = createPattern(recipe, msg.isCraftingPattern, msg.selectedIngredients, player);
@@ -114,21 +108,16 @@ public class CreateCtrlQPatternC2SPacket {
                 return;
             }
 
-            LOGGER.info("[CtrlQPattern] Pattern created successfully");
-
             // 4. 根据样板类型选择交付方式
             if (msg.isCraftingPattern) {
                 // 合成样板：始终掉落到玩家脚下
                 player.drop(pattern, false);
-                LOGGER.info("[CtrlQPattern] Crafting pattern dropped at player feet");
             } else {
                 // 处理样板：优先放入背包，满了再掉落
                 boolean added = player.getInventory().add(pattern);
                 if (added) {
-                    LOGGER.info("[CtrlQPattern] Processing pattern added to inventory");
                 } else {
                     player.drop(pattern, false);
-                    LOGGER.info("[CtrlQPattern] Processing pattern dropped (inventory full)");
                 }
             }
 
@@ -150,7 +139,6 @@ public class CreateCtrlQPatternC2SPacket {
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
             if (stack.is(AEItems.BLANK_PATTERN.asItem())) {
-                LOGGER.debug("[CtrlQPattern] Found blank pattern in slot {}", i);
                 stack.shrink(1); // 消耗一个
                 return true;
             }
@@ -172,7 +160,6 @@ public class CreateCtrlQPatternC2SPacket {
         try {
             if (isCrafting && recipe instanceof CraftingRecipe craftingRecipe) {
                 // ===== 合成样板创建路径 =====
-                LOGGER.info("[CtrlQPattern] Creating crafting pattern for recipe: {}", recipe.getId());
 
                 // 准备9格工作台输入（3x3布局）
                 ItemStack[] inputs = new ItemStack[9];
@@ -182,13 +169,10 @@ public class CreateCtrlQPatternC2SPacket {
                     } else {
                         inputs[i] = ItemStack.EMPTY;
                     }
-                    LOGGER.debug("[CtrlQPattern] Crafting input[{}]: {}", i,
-                        inputs[i].isEmpty() ? "EMPTY" : inputs[i].getItem());
                 }
 
                 // 准备输出
                 ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
-                LOGGER.debug("[CtrlQPattern] Crafting output: {} x{}", output.getItem(), output.getCount());
 
                 // 使用 encodeCraftingPattern 创建合成样板
                 // 直接传递 CraftingRecipe 对象而非 RecipeHolder
@@ -200,12 +184,10 @@ public class CreateCtrlQPatternC2SPacket {
                     false  // allowFluidSubstitutes - 不允许流体替代
                 );
 
-                LOGGER.info("[CtrlQPattern] Crafting pattern encoded successfully");
                 return encodedPattern;
 
             } else {
                 // ===== 处理样板创建路径 =====
-                LOGGER.info("[CtrlQPattern] Creating processing pattern for recipe: {}", recipe.getId());
 
                 List<GenericStack> inputs = new ArrayList<>();
                 List<GenericStack> outputs = new ArrayList<>();
@@ -217,7 +199,6 @@ public class CreateCtrlQPatternC2SPacket {
                             AEItemKey.of(item),
                             item.getCount()
                         ));
-                        LOGGER.debug("[CtrlQPattern] Processing input: {} x{}", item.getItem(), item.getCount());
                     }
                 }
 
@@ -228,7 +209,6 @@ public class CreateCtrlQPatternC2SPacket {
                         AEItemKey.of(result),
                         result.getCount()
                     ));
-                    LOGGER.debug("[CtrlQPattern] Processing output: {} x{}", result.getItem(), result.getCount());
                 }
 
                 // 使用 encodeProcessingPattern 创建处理样板
@@ -237,7 +217,6 @@ public class CreateCtrlQPatternC2SPacket {
                     outputs.toArray(new GenericStack[0])
                 );
 
-                LOGGER.info("[CtrlQPattern] Processing pattern encoded successfully");
                 return encodedPattern;
             }
 

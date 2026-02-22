@@ -29,16 +29,13 @@ public class RecipeFinderUtil {
      * @return 相关配方列表
      */
     public static List<Recipe<?>> findRecipesByIngredient(ITypedIngredient<?> ingredient, Level level) {
-        LOGGER.info("[RecipeFinder] findRecipesByIngredient called with ingredient type: {}", ingredient.getType());
-
         if (ingredient.getType() == VanillaTypes.ITEM_STACK) {
             ItemStack stack = (ItemStack) ingredient.getIngredient();
-            LOGGER.info("[RecipeFinder] Processing ItemStack: {}", stack.getItem());
             return findRecipesByItem(stack, level);
         }
 
         LOGGER.warn("[RecipeFinder] Unsupported ingredient type: {}", ingredient.getType());
-        // TODO: 支持流体、化学物等
+        // TODO: Support fluids, chemicals, and other AE2-compatible types
         return List.of();
     }
 
@@ -50,37 +47,27 @@ public class RecipeFinderUtil {
      * @return 配方列表
      */
     private static List<Recipe<?>> findRecipesByItem(ItemStack item, Level level) {
-        LOGGER.info("[RecipeFinder] Finding recipes for item: {} ({})", item.getItem(), item.getCount());
-
         List<Recipe<?>> results = new ArrayList<>();
         int totalRecipes = level.getRecipeManager().getRecipes().size();
-        LOGGER.info("[RecipeFinder] Total recipes in manager: {}", totalRecipes);
 
         // 1. 查找以该物品为输出的配方
         int outputMatches = 0;
         for (Recipe<?> recipe : level.getRecipeManager().getRecipes()) {
             if (matchesOutput(recipe, item)) {
-                LOGGER.debug("[RecipeFinder] Found output match: {}", recipe.getId());
                 results.add(recipe);
                 outputMatches++;
             }
         }
-        LOGGER.info("[RecipeFinder] Output matches found: {}", outputMatches);
 
         // 2. 如果按住Shift，也查找以该物品为输入的配方
         if (Screen.hasShiftDown()) {
-            LOGGER.info("[RecipeFinder] Shift held, searching for input recipes");
             int inputMatches = 0;
             for (Recipe<?> recipe : level.getRecipeManager().getRecipes()) {
                 if (matchesInput(recipe, item) && !results.contains(recipe)) {
-                    LOGGER.debug("[RecipeFinder] Found input match: {}", recipe.getId());
                     results.add(recipe);
                     inputMatches++;
                 }
             }
-            LOGGER.info("[RecipeFinder] Input matches found: {}", inputMatches);
-        } else {
-            LOGGER.debug("[RecipeFinder] Shift not held, skipping input search");
         }
 
         // 3. 优先级排序: CraftingRecipe优先
@@ -92,7 +79,6 @@ public class RecipeFinderUtil {
             return 0; // 保持原顺序
         });
 
-        LOGGER.info("[RecipeFinder] Final result count: {}", results.size());
         return results;
     }
 
@@ -110,13 +96,11 @@ public class RecipeFinderUtil {
         // 优先返回CraftingRecipe
         for (Recipe<?> recipe : recipes) {
             if (recipe instanceof CraftingRecipe) {
-                LOGGER.info("[RecipeFinder] Selected CraftingRecipe: {}", recipe.getId());
                 return recipe;
             }
         }
 
         // 没有工作台配方，返回第一个
-        LOGGER.info("[RecipeFinder] No CraftingRecipe found, using first recipe: {}", recipes.get(0).getId());
         return recipes.get(0);
     }
 
@@ -127,9 +111,6 @@ public class RecipeFinderUtil {
         try {
             ItemStack result = recipe.getResultItem(null);
             boolean matches = ItemStack.isSameItemSameTags(result, target);
-            if (matches) {
-                LOGGER.debug("[RecipeFinder] Output match: {} -> {}", recipe.getId(), target.getItem());
-            }
             return matches;
         } catch (Exception e) {
             LOGGER.warn("[RecipeFinder] Exception in matchesOutput for recipe {}: {}", recipe.getId(), e.getMessage());
@@ -144,9 +125,6 @@ public class RecipeFinderUtil {
         try {
             boolean matches = recipe.getIngredients().stream()
                 .anyMatch(ingredient -> ingredient.test(target));
-            if (matches) {
-                LOGGER.debug("[RecipeFinder] Input match: {} <- {}", recipe.getId(), target.getItem());
-            }
             return matches;
         } catch (Exception e) {
             LOGGER.warn("[RecipeFinder] Exception in matchesInput for recipe {}: {}", recipe.getId(), e.getMessage());

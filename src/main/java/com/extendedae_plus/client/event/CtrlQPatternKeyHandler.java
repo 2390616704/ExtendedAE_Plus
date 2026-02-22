@@ -47,9 +47,6 @@ public class CtrlQPatternKeyHandler {
         int keyCode = event.getKeyCode();
         int scanCode = event.getScanCode();
 
-        LOGGER.debug("[CtrlQKeyHandler] ScreenEvent.KeyPressed - key={}, scanCode={}, screen={}",
-            keyCode, scanCode, screen != null ? screen.getClass().getSimpleName() : "null");
-
         // 使用 KeyMapping 检测按键（而非硬编码）
         if (!ModKeybindings.CREATE_PATTERN_KEY.matches(keyCode, scanCode)) {
             return;
@@ -60,8 +57,6 @@ public class CtrlQPatternKeyHandler {
             return;
         }
 
-        LOGGER.info("[CtrlQKeyHandler] Ctrl+Q pressed in screen!");
-
         // JEI 必须可用
         if (JeiRuntimeProxy.get() == null) {
             LOGGER.warn("[CtrlQKeyHandler] JEI not available");
@@ -70,7 +65,6 @@ public class CtrlQPatternKeyHandler {
 
         // 获取鼠标悬浮的物品
         Optional<ITypedIngredient<?>> ingredient = JeiRuntimeProxy.getIngredientUnderMouse();
-        LOGGER.info("[CtrlQKeyHandler] Ingredient found: {}", ingredient.isPresent());
 
         if (ingredient.isEmpty()) {
             LOGGER.warn("[CtrlQKeyHandler] No ingredient under mouse");
@@ -86,13 +80,10 @@ public class CtrlQPatternKeyHandler {
 
         // 查找相关配方
         Minecraft mc = Minecraft.getInstance();
-        LOGGER.info("[CtrlQKeyHandler] Finding recipes for ingredient: {}", ingredient.get());
         List<Recipe<?>> recipes = RecipeFinderUtil.findRecipesByIngredient(
             ingredient.get(),
             mc.level
         );
-
-        LOGGER.info("[CtrlQKeyHandler] Found {} recipes", recipes.size());
 
         if (recipes.isEmpty()) {
             LOGGER.warn("[CtrlQKeyHandler] No recipes found");
@@ -113,12 +104,9 @@ public class CtrlQPatternKeyHandler {
         }
 
         boolean isCraftingPattern = selectedRecipe instanceof CraftingRecipe;
-        LOGGER.info("[CtrlQKeyHandler] Selected recipe: {} (isCrafting: {})",
-            selectedRecipe.getId(), isCraftingPattern);
 
         // 应用JEI书签优先级选择材料
         List<ItemStack> selectedIngredients = selectIngredientsWithJeiPriority(selectedRecipe);
-        LOGGER.info("[CtrlQKeyHandler] Selected {} ingredients with JEI priority", selectedIngredients.size());
 
         // 发送网络包到服务器
         ModNetwork.CHANNEL.sendToServer(new CreateCtrlQPatternC2SPacket(
@@ -126,8 +114,6 @@ public class CtrlQPatternKeyHandler {
             isCraftingPattern,
             selectedIngredients
         ));
-
-        LOGGER.info("[CtrlQKeyHandler] Packet sent to server");
 
         // 消耗事件，防止传播
         event.setCanceled(true);
@@ -154,8 +140,6 @@ public class CtrlQPatternKeyHandler {
                 priorities.put(AEItemKey.of(itemStack), index.getAndDecrement())
             );
         }
-
-        LOGGER.debug("[CtrlQKeyHandler] JEI bookmark priorities built: {} items", priorities.size());
 
         List<ItemStack> selected = new ArrayList<>();
 
@@ -191,9 +175,6 @@ public class CtrlQPatternKeyHandler {
                     best = items[i];
                 }
             }
-
-            LOGGER.debug("[CtrlQKeyHandler] Selected ingredient: {} (priority: {})",
-                best.getItem(), bestPriority);
 
             selected.add(best.copy());
         }
