@@ -217,6 +217,16 @@ public class CreateCtrlQPatternC2SPacket {
                     outputs.toArray(new GenericStack[0])
                 );
 
+                // 为处理样板设置自定义名称：输出物品名称 + 配方类型类名（去掉常见后缀）
+                if (!encodedPattern.isEmpty()) {
+                    String outputName = result.getHoverName().getString();
+                    String recipeTypeName = recipe.getClass().getSimpleName()
+                            .replaceAll("Recipe(s)?$", "")
+                            .replaceAll("Category$", "");
+                    Component customName = Component.literal(outputName + " - " + recipeTypeName);
+                    encodedPattern.setHoverName(customName);
+                }
+
                 return encodedPattern;
             }
 
