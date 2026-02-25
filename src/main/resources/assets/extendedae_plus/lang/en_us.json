@@ -236,6 +236,16 @@
   "message.extendedae_plus.pattern_creation_failed": "Pattern creation failed",
   "message.extendedae_plus.pattern_created": "Created pattern: %s",
 
+  "block.extendedae_plus.pattern_router": "Pattern Router",
+  "item.extendedae_plus.pattern_router": "Pattern Router",
+  "tooltip.extendedae_plus.pattern_router": "Reads patterns from adjacent containers and intelligently routes materials",
+
+  "message.extendedae_plus.router.no_suffix": "Pattern [%s] is missing recipe type suffix. Please rename the pattern in an anvil using format 'ItemName_RecipeType' (e.g., IronIngot_Smelting)",
+  "message.extendedae_plus.router.no_provider": "Pattern [%s] cannot find pattern provider matching '%s'. Ensure a pattern provider in the network has '%s' in its name",
+  "message.extendedae_plus.router.providers_busy": "Pattern [%s]: All matching providers are full or busy. Please wait or add more pattern providers",
+  "message.extendedae_plus.router.providers_full": "Pattern [%s]: All matching providers are full. Please add more pattern providers or remove some patterns",
+  "message.extendedae_plus.router.pattern_inserted": "Pattern [%s] successfully inserted into pattern provider",
+
   "key.extendedae_plus.create_pattern": "Create Pattern from JEI",
   "key.categories.extendedae_plus": "ExtendedAE Plus"
 }

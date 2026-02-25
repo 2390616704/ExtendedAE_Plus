@@ -235,6 +235,16 @@
   "message.extendedae_plus.pattern_creation_failed": "样板创建失败",
   "message.extendedae_plus.pattern_created": "已创建样板: %s",
 
+  "block.extendedae_plus.pattern_router": "样板路由器",
+  "item.extendedae_plus.pattern_router": "样板路由器",
+  "tooltip.extendedae_plus.pattern_router": "从相邻容器读取样板并智能路由材料",
+
+  "message.extendedae_plus.router.no_suffix": "样板 [%s] 缺少配方类型后缀。请在铁砧中将样板重命名为 '物品名_配方类型' 格式（例如：铁锭_Smelting）",
+  "message.extendedae_plus.router.no_provider": "样板 [%s] 找不到匹配 '%s' 的样板供应器。请确保网络中有样板供应器的名称包含 '%s'",
+  "message.extendedae_plus.router.providers_busy": "样板 [%s] 的所有匹配供应器都已满或繁忙。请等待或添加更多样板供应器",
+  "message.extendedae_plus.router.providers_full": "样板 [%s] 的所有匹配供应器都已满。请添加更多样板供应器或移除一些样板",
+  "message.extendedae_plus.router.pattern_inserted": "样板 [%s] 已成功插入样板供应器",
+
   "key.extendedae_plus.create_pattern": "从JEI创建样板",
   "key.categories.extendedae_plus": "ExtendedAE Plus"
 }

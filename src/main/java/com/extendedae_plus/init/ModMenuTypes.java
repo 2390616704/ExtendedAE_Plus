@@ -4,8 +4,10 @@ import appeng.menu.implementations.MenuTypeBuilder;
 import com.extendedae_plus.ExtendedAEPlus;
 import com.extendedae_plus.ae.menu.EntitySpeedTickerMenu;
 import com.extendedae_plus.ae.parts.EntitySpeedTickerPart;
+import com.extendedae_plus.content.router.PatternRouterBlockEntity;
 import com.extendedae_plus.menu.LabeledWirelessTransceiverMenu;
 import com.extendedae_plus.menu.NetworkPatternControllerMenu;
+import com.extendedae_plus.menu.PatternRouterMenu;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraftforge.common.extensions.IForgeMenuType;
 import net.minecraftforge.registries.DeferredRegister;
@@ -32,4 +34,11 @@ public final class ModMenuTypes {
                     () -> MenuTypeBuilder
                             .create(EntitySpeedTickerMenu::new, EntitySpeedTickerPart.class)
                             .build("entity_speed_ticker"));
+
+    public static final RegistryObject<MenuType<PatternRouterMenu>> PATTERN_ROUTER =
+            MENUS.register("pattern_router",
+                    () -> MenuTypeBuilder
+                            .create(PatternRouterMenu::new, PatternRouterBlockEntity.class)
+                            .build("pattern_router"));
 }
+

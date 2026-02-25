@@ -59,6 +59,13 @@ public final class ModItems {
             "assembler_matrix_pattern_plus",
             ()-> new BlockItem(ModBlocks.ASSEMBLER_MATRIX_PATTERN_PLUS.get(), new Item.Properties())
     );
+
+    // 样板路由器
+    public static final RegistryObject<Item> PATTERN_ROUTER = ITEMS.register(
+            "pattern_router",
+            () -> new BlockItem(ModBlocks.PATTERN_ROUTER.get(), new Item.Properties())
+    );
+
     // Crafting Accelerators
     public static final RegistryObject<Item> CRAFTING_ACCELERATOR_4x = ITEMS.register(
             "4x_crafting_accelerator",

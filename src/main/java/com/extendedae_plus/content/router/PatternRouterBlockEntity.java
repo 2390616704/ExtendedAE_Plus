@@ -1,67 +1,167 @@
 package com.extendedae_plus.content.router;
 
-import appeng.api.crafting.IPatternDetails;
-import appeng.api.crafting.PatternDetailsHelper;
 import appeng.api.networking.*;
-import appeng.api.networking.crafting.ICraftingProvider;
-import appeng.api.stacks.KeyCounter;
+import appeng.api.networking.ticking.IGridTickable;
+import appeng.api.networking.ticking.TickRateModulation;
+import appeng.api.networking.ticking.TickingRequest;
+import appeng.core.definitions.AEItems;
+import appeng.core.settings.TickRates;
+import appeng.menu.locator.MenuLocators;
+import appeng.util.inv.AppEngInternalInventory;
+import appeng.util.inv.InternalInventoryHost;
 import com.extendedae_plus.init.ModBlockEntities;
+import com.extendedae_plus.menu.PatternRouterMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.MenuProvider;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
-
-import java.util.ArrayList;
-import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * 样板路由器方块实体
+ * 样板输入总线方块实体
  *
- * 核心功能：
- * 1. 从相邻容器读取样板（通过AdjacentInventoryReader）
- * 2. 作为ICraftingProvider提供样板给AE网络
- * 3. 根据样板后缀路由材料到匹配的供应器（通过RoutingManager）
+ * 参考 ME接口 设计：
+ * 1. 玩家将编码样板放入存储槽
+ * 2. 定期 tick 检查每个样板
+ * 3. 根据样板名称后缀找到匹配的供应器
+ * 4. 将样板插入供应器（使用正确的 API）
+ * 5. 如果没有匹配的供应器，保留在槽中并提示玩家
  */
-public class PatternRouterBlockEntity extends BlockEntity
-        implements IInWorldGridNodeHost, ICraftingProvider {
+public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGridNodeHost, InternalInventoryHost, MenuProvider {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(PatternRouterBlockEntity.class);
 
     // 核心组件
     private final IManagedGridNode managedNode;
-    private AdjacentInventoryReader inventoryReader;
-    private RoutingManager routingManager;
-
-    // 样板缓存
-    private List<IPatternDetails> cachedPatterns = new ArrayList<>();
+    private final AppEngInternalInventory patternStorage; // 存储待插入的样板（9个槽位）
+    private PatternInsertionManager insertionManager;
 
     public PatternRouterBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.PATTERN_ROUTER_BE.get(), pos, state);
 
+        // 创建样板存储
+        this.patternStorage = new AppEngInternalInventory(this, 9, 1);
+
         // 创建网格节点
         this.managedNode = GridHelper.createManagedNode(this, NodeListener.INSTANCE);
-        this.managedNode.setIdlePowerUsage(1.0); // 设置功耗
+        this.managedNode.setIdlePowerUsage(1.0);
         this.managedNode.setInWorldNode(true);
-        this.managedNode.setFlags(GridFlags.REQUIRE_CHANNEL); // 需要频道
-        this.managedNode.setTagName("pattern_router");
+        this.managedNode.setFlags(GridFlags.REQUIRE_CHANNEL);
+        this.managedNode.setTagName("pattern_input_bus");
 
-        // 注册为合成提供者
-        this.managedNode.addService(ICraftingProvider.class, this);
+        // 注册 Ticker 服务
+        this.managedNode.addService(IGridTickable.class, new Ticker());
     }
 
     @Override
     public void onLoad() {
         super.onLoad();
+        System.out.println("[PatternRouterBlockEntity] onLoad() called, isClientSide: " + (this.level != null && this.level.isClientSide));
         if (this.level != null && !this.level.isClientSide) {
-            // 延迟初始化，确保world已加载
+            System.out.println("[PatternRouterBlockEntity] Server side onLoad");
             GridHelper.onFirstTick(this, be -> {
+                System.out.println("[PatternRouterBlockEntity] First tick, creating grid node");
                 be.managedNode.create(be.getLevel(), be.getBlockPos());
-                // 首次加载时创建辅助组件
-                be.inventoryReader = new AdjacentInventoryReader(be);
-                be.routingManager = new RoutingManager();
-                be.updatePatternCache();
+                be.insertionManager = new PatternInsertionManager();
+                System.out.println("[PatternRouterBlockEntity] Initialization complete");
             });
         }
+    }
+
+    /**
+     * Ticker - 定期尝试插入样板
+     */
+    private class Ticker implements IGridTickable {
+        @Override
+        public TickingRequest getTickingRequest(IGridNode node) {
+            System.out.println("[PatternRouterBlockEntity.Ticker] getTickingRequest() called, hasWorkToDo: " + hasWorkToDo());
+            return new TickingRequest(TickRates.Interface, !hasWorkToDo(), false);
+        }
+
+        @Override
+        public TickRateModulation tickingRequest(IGridNode node, int ticksSinceLastCall) {
+            System.out.println("[PatternRouterBlockEntity.Ticker] tickingRequest() called");
+            if (!managedNode.isActive()) {
+                System.out.println("[PatternRouterBlockEntity.Ticker] Node not active, sleeping");
+                return TickRateModulation.SLEEP;
+            }
+
+            boolean didWork = tryInsertPatterns();
+            System.out.println("[PatternRouterBlockEntity.Ticker] didWork: " + didWork + ", hasWork: " + hasWorkToDo());
+            return hasWorkToDo() ?
+                (didWork ? TickRateModulation.URGENT : TickRateModulation.SLOWER) :
+                TickRateModulation.SLEEP;
+        }
+    }
+
+    /**
+     * 检查是否有待处理的样板
+     */
+    private boolean hasWorkToDo() {
+        for (ItemStack stack : patternStorage) {
+            if (!stack.isEmpty() && isEncodedPattern(stack)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 尝试插入所有样板
+     */
+    private boolean tryInsertPatterns() {
+        if (insertionManager == null || !managedNode.isActive()) {
+            return false;
+        }
+
+        var grid = managedNode.getGrid();
+        if (grid == null) {
+            return false;
+        }
+
+        boolean didWork = false;
+
+        // 遍历所有槽位
+        for (int slot = 0; slot < patternStorage.size(); slot++) {
+            ItemStack patternStack = patternStorage.getStackInSlot(slot);
+
+            if (patternStack.isEmpty() || !isEncodedPattern(patternStack)) {
+                continue;
+            }
+
+            // 尝试插入
+            boolean success = insertionManager.insertPattern(patternStack, grid, null, worldPosition);
+
+            if (success) {
+                // 插入成功，从槽位移除
+                patternStorage.setItemDirect(slot, ItemStack.EMPTY);
+                didWork = true;
+                break; // 每 tick 只处理一个，避免卡顿
+            }
+        }
+
+        return didWork;
+    }
+
+    /**
+     * 检查是否是编码样板
+     */
+    private boolean isEncodedPattern(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return false;
+        }
+        // 检查是否是 AE2 的编码样板
+        return stack.getItem() == AEItems.PROCESSING_PATTERN.asItem() ||
+               stack.getItem() == AEItems.CRAFTING_PATTERN.asItem();
     }
 
     // ========== IInWorldGridNodeHost 实现 ==========
@@ -91,74 +191,37 @@ public class PatternRouterBlockEntity extends BlockEntity
         }
     }
 
-    // ========== ICraftingProvider 实现 ==========
+    // ========== InternalInventoryHost 实现 ==========
 
     @Override
-    public List<IPatternDetails> getAvailablePatterns() {
-        // 返回从相邻容器读取到的样板
-        return cachedPatterns;
-    }
-
-    @Override
-    public boolean pushPattern(IPatternDetails patternDetails, KeyCounter[] inputHolder) {
-        // 检查网格是否可用
-        if (this.managedNode == null || !this.managedNode.isActive()) {
-            return false;
-        }
-
-        IGrid grid = this.managedNode.getGrid();
-        if (grid == null) {
-            return false;
-        }
-
-        // 委托路由管理器处理（阶段3实现）
-        if (this.routingManager != null) {
-            return routingManager.routePattern(patternDetails, inputHolder, grid, null);
-        }
-
-        return false;
+    public void saveChanges() {
+        setChanged();
     }
 
     @Override
-    public boolean isBusy() {
-        // 路由器本身不执行合成，永远不忙
-        return false;
+    public boolean isClientSide() {
+        return level == null || level.isClientSide();
     }
 
-    // ========== 样板缓存管理 ==========
-
-    /**
-     * 更新样板缓存
-     * 从相邻容器读取所有样板
-     */
-    public void updatePatternCache() {
-        if (this.inventoryReader != null && this.level != null) {
-            this.cachedPatterns = inventoryReader.readPatterns();
-            // 通知AE网络样板列表已更新
-            ICraftingProvider.requestUpdate(this.managedNode);
+    @Override
+    public void onChangeInventory(appeng.api.inventories.InternalInventory inv, int slot) {
+        // 当样板存储变化时，唤醒 ticker
+        if (this.managedNode.isActive()) {
+            this.managedNode.ifPresent((grid, node) -> {
+                grid.getTickManager().wakeDevice(node);
+            });
         }
-    }
-
-    /**
-     * 相邻方块变化时调用
-     */
-    public void onNeighborChanged() {
-        // 清除缓存并重新读取样板
-        if (this.inventoryReader != null) {
-            this.inventoryReader.invalidateCache();
-        }
-        updatePatternCache();
     }
 
     // ========== NBT保存/加载 ==========
 
     @Override
-    protected void saveAdditional(CompoundTag tag) {
+    public void saveAdditional(CompoundTag tag) {
         super.saveAdditional(tag);
         if (this.managedNode != null) {
             this.managedNode.saveToNBT(tag);
         }
-        // 未来可能需要保存配置数据
+        this.patternStorage.writeToNBT(tag, "patterns");
     }
 
     @Override
@@ -167,7 +230,7 @@ public class PatternRouterBlockEntity extends BlockEntity
         if (this.managedNode != null) {
             this.managedNode.loadFromNBT(tag);
         }
-        // 未来可能需要加载配置数据
+        this.patternStorage.readFromNBT(tag, "patterns");
     }
 
     // ========== 网格节点监听器 ==========
@@ -183,11 +246,25 @@ public class PatternRouterBlockEntity extends BlockEntity
 
     // ========== Getter方法 ==========
 
-    public AdjacentInventoryReader getInventoryReader() {
-        return inventoryReader;
+    public AppEngInternalInventory getPatternStorage() {
+        return patternStorage;
     }
 
-    public RoutingManager getRoutingManager() {
-        return routingManager;
+    // ========== MenuProvider 实现 ==========
+
+    @Override
+    public Component getDisplayName() {
+        System.out.println("[PatternRouterBlockEntity] getDisplayName() called");
+        return Component.translatable("block.extendedae_plus.pattern_router");
+    }
+
+    @Nullable
+    @Override
+    public AbstractContainerMenu createMenu(int containerId, Inventory playerInventory, Player player) {
+        System.out.println("[PatternRouterBlockEntity] createMenu() called for player: " + (player == null ? "null" : player.getName().getString()));
+        System.out.println("[PatternRouterBlockEntity] patternStorage size: " + this.patternStorage.size());
+        PatternRouterMenu menu = new PatternRouterMenu(containerId, playerInventory, this);
+        System.out.println("[PatternRouterBlockEntity] Menu created successfully");
+        return menu;
     }
 }

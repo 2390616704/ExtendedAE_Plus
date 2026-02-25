@@ -8,11 +8,13 @@ import com.extendedae_plus.ae.screen.EntitySpeedTickerScreen;
 import com.extendedae_plus.client.render.crafting.EPlusCraftingCubeModelProvider;
 import com.extendedae_plus.client.screen.GlobalProviderModesScreen;
 import com.extendedae_plus.client.screen.LabeledWirelessTransceiverScreen;
+import com.extendedae_plus.client.screen.PatternRouterScreen;
 import com.extendedae_plus.content.crafting.EPlusCraftingUnitType;
 import com.extendedae_plus.hooks.BuiltInModelHooks;
 import com.extendedae_plus.init.ModItems;
 import com.extendedae_plus.init.ModMenuTypes;
 import com.extendedae_plus.items.materials.EntitySpeedCardItem;
+import com.extendedae_plus.menu.PatternRouterMenu;
 import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraft.client.renderer.item.ItemProperties;
 import net.minecraftforge.fml.ModList;
@@ -71,6 +73,10 @@ public final class ClientRegistrar {
         InitScreens.register(ModMenuTypes.ENTITY_TICKER_MENU.get(),
                 EntitySpeedTickerScreen<EntitySpeedTickerMenu>::new,
                 "/screens/entity_speed_ticker.json");
+
+        InitScreens.register(ModMenuTypes.PATTERN_ROUTER.get(),
+                PatternRouterScreen::new,
+                "/screens/pattern_router.json");
     }
 
     /**
