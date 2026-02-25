@@ -9,6 +9,7 @@ import com.extendedae_plus.content.matrix.CrafterCorePlusBlock;
 import com.extendedae_plus.content.matrix.PatternCorePlusBlock;
 import com.extendedae_plus.content.matrix.SpeedCorePlusBlock;
 import com.extendedae_plus.content.matrix.UploadCoreBlock;
+import com.extendedae_plus.content.router.PatternRouterBlock;
 import com.extendedae_plus.content.wireless.LabeledWirelessTransceiverBlock;
 import com.extendedae_plus.content.wireless.WirelessTransceiverBlock;
 import net.minecraft.world.level.block.Block;
@@ -80,6 +81,17 @@ public final class ModBlocks {
     public static final RegistryObject<PatternCorePlusBlock> ASSEMBLER_MATRIX_PATTERN_PLUS = BLOCKS.register(
             "assembler_matrix_pattern_plus",
             PatternCorePlusBlock::new
+    );
+
+    // 样板路由器
+    public static final RegistryObject<Block> PATTERN_ROUTER = BLOCKS.register(
+            "pattern_router",
+            () -> new PatternRouterBlock(
+                    BlockBehaviour.Properties.of()
+                            .mapColor(MapColor.METAL)
+                            .strength(2.0F, 6.0F)
+                            .requiresCorrectToolForDrops()
+            )
     );
     // Crafting Accelerators (reuse MAE2 textures/models)
     public static final RegistryObject<CraftingUnitBlock> CRAFTING_ACCELERATOR_4x = BLOCKS.register(

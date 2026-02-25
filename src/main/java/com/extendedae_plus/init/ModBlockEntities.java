@@ -4,6 +4,7 @@ import com.extendedae_plus.ExtendedAEPlus;
 import com.extendedae_plus.content.matrix.CrafterCorePlusBlockEntity;
 import com.extendedae_plus.content.matrix.PatternCorePlusBlockEntity;
 import com.extendedae_plus.content.matrix.SpeedCorePlusBlockEntity;
+import com.extendedae_plus.content.router.PatternRouterBlockEntity;
 import com.extendedae_plus.content.wireless.LabeledWirelessTransceiverBlockEntity;
 import com.extendedae_plus.content.wireless.WirelessTransceiverBlockEntity;
 import com.extendedae_plus.content.matrix.UploadCoreBlockEntity;
@@ -52,6 +53,12 @@ public final class ModBlockEntities {
             BLOCK_ENTITY_TYPES.register("assmbler_matrix_pattern_plus",
                     ()-> BlockEntityType.Builder.of(PatternCorePlusBlockEntity::new,
                             ModBlocks.ASSEMBLER_MATRIX_PATTERN_PLUS.get()).build(null));
+
+    // 样板路由器
+    public static final RegistryObject<BlockEntityType<PatternRouterBlockEntity>> PATTERN_ROUTER_BE =
+            BLOCK_ENTITY_TYPES.register("pattern_router",
+                    () -> BlockEntityType.Builder.of(PatternRouterBlockEntity::new,
+                            ModBlocks.PATTERN_ROUTER.get()).build(null));
 
     // 装配矩阵上传核心
     public static final RegistryObject<BlockEntityType<UploadCoreBlockEntity>> UPLOAD_CORE_BE =

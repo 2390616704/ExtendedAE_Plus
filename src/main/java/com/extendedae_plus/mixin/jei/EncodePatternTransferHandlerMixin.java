@@ -42,7 +42,7 @@ public abstract class EncodePatternTransferHandlerMixin {
             try {
                 var field = recipeBase.getClass().getField("recipe"); // public final GTRecipe recipe;
                 Object inner = field.get(recipeBase);
-                // 反射路径：将内部 GTRecipe 以 Object 传入
+                // 反射路径：将内部 GTRecipe 以 Object 传
                 name = RecipeTypeNameConfig.mapGTCEuRecipeToSearchKey(inner);
             } catch (Throwable ignored) {
                 // 反射失败则继续走通用回退
