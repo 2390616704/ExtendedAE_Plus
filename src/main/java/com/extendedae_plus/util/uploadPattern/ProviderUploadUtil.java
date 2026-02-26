@@ -7,119 +7,68 @@ import appeng.menu.implementations.PatternAccessTermMenu;
 import appeng.menu.me.items.PatternEncodingTermMenu;
 import appeng.util.inv.FilteredInternalInventory;
 import appeng.util.inv.filter.IAEItemFilter;
+import com.extendedae_plus.init.ModNetwork;
 import com.extendedae_plus.mixin.ae2.accessor.PatternEncodingTermMenuAccessor;
+import com.extendedae_plus.network.provider.ProvidersListS2CPacket;
 import com.extendedae_plus.util.PatternProviderDataUtil;
 import com.extendedae_plus.util.PatternTerminalUtil;
+import com.extendedae_plus.util.wireless.WirelessTerminalGridUtil;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * 与样板供应器（provider）上传相关的工具类：
- * - uploadPatternToProvider (从玩家背包上传)
- * - uploadFromEncodingMenuToProvider (从编码终端上传至指定 providerId)
- * - uploadFromEncodingMenuToProviderByIndex (按网格顺序 index 上传)
- *
- * 其中使用 PatternTerminalUtil 提供的反射/容器访问工具。
+ * Pattern provider upload helpers.
  */
 public final class ProviderUploadUtil {
-    private ProviderUploadUtil() {}
-
-    /**
-     * 发送消息给玩家
-     *
-     * @param player 玩家
-     * @param message 消息内容
-     */
-    private static void sendMessage(ServerPlayer player, String message) {
-        // 静默：不再向玩家左下角发送任何提示信息
-        // 如需恢复，取消下面注释即可：
-        // if (player != null) {
-        //     player.sendSystemMessage(Component.literal(message));
-        // }
-        // 如果玩家为null，静默忽略（用于测试环境）
+    private ProviderUploadUtil() {
     }
 
-    /**
-     * 将玩家背包中的样板上传到指定的样板供应器
-     * 兼容ExtendedAE和原版AE2
-     *
-     * @param player 玩家
-     * @param playerSlotIndex 玩家背包槽位索引
-     * @param providerId 目标样板供应器的服务器ID
-     * @return 是否上传成功
-     */
+    private static final String PENDING_DATA_KEY = "eap_ctrlq_pending_provider_upload_id";
+    private static final String PENDING_TAG_KEY = "eapCtrlQPendingProviderUploadId";
+
+    private static void sendMessage(ServerPlayer player, String message) {
+        // Intentionally quiet in normal gameplay.
+    }
+
     public static boolean uploadPatternToProvider(ServerPlayer player, int playerSlotIndex, long providerId) {
-        // 1. 验证玩家是否打开了样板访问终端
         PatternAccessTermMenu menu = PatternTerminalUtil.getPatternAccessMenu(player);
         if (menu == null) {
-            sendMessage(player, "ExtendedAE Plus: 请先打开样板访问终端或扩展样板管理终端");
+            sendMessage(player, "ExtendedAE Plus: open a pattern access terminal first");
             return false;
         }
 
-        // 2. 获取玩家背包中的物品
         ItemStack playerItem = player.getInventory().getItem(playerSlotIndex);
-        if (playerItem.isEmpty()) {
-            sendMessage(player, "ExtendedAE Plus: 背包槽位为空");
+        if (playerItem.isEmpty() || !PatternDetailsHelper.isEncodedPattern(playerItem)) {
             return false;
         }
 
-        // 3. 验证是否是编码样板
-        if (!PatternDetailsHelper.isEncodedPattern(playerItem)) {
-            sendMessage(player, "ExtendedAE Plus: 该物品不是有效的编码样板");
-            return false;
-        }
-
-        // 4. 获取目标样板供应器
         PatternContainer patternContainer = PatternTerminalUtil.getPatternContainerById(menu, providerId);
         if (patternContainer == null) {
-            sendMessage(player, "ExtendedAE Plus: 找不到指定的样板供应器 (ID: " + providerId + ")");
             return false;
         }
 
-        // 5. 获取样板供应器的库存
         InternalInventory patternInventory = patternContainer.getTerminalPatternInventory();
         if (patternInventory == null) {
-            sendMessage(player, "ExtendedAE Plus: 无法访问样板供应器的库存");
             return false;
         }
 
-        // 6. 使用AE2的标准样板过滤器进行插入
-        var patternFilter = new ExtendedAEPatternFilter();
-        var filteredInventory = new FilteredInternalInventory(patternInventory, patternFilter);
-
-        // 7. 尝试插入样板
-        ItemStack itemToInsert = playerItem.copy();
-        ItemStack remaining = filteredInventory.addItems(itemToInsert);
-
-        if (remaining.getCount() < itemToInsert.getCount()) {
-            // 插入成功（部分或全部）
-            int insertedCount = itemToInsert.getCount() - remaining.getCount();
-            playerItem.shrink(insertedCount);
-
+        return insertIntoInventoryAndShrinkPlayerStack(patternInventory, playerItem, () -> {
             if (playerItem.isEmpty()) {
                 player.getInventory().setItem(playerSlotIndex, ItemStack.EMPTY);
             }
-
-            String terminalType = PatternTerminalUtil.isExtendedAETerminal(player) ? "扩展样板管理终端" : "样板访问终端";
-            sendMessage(player, "ExtendedAE Plus: 通过" + terminalType + "成功上传 " + insertedCount + " 个样板");
-            return true;
-        } else {
-            sendMessage(player, "ExtendedAE Plus: 上传失败 - 样板供应器已满或样板无效");
-            return false;
-        }
+        });
     }
 
-    /**
-     * 将图样编码终端的“已编码图样”上传到指定的样板供应器（通过 providerId 定位）。
-     */
     public static boolean uploadFromEncodingMenuToProvider(ServerPlayer player, PatternEncodingTermMenu menu, long providerId) {
         if (player == null || menu == null) {
             return false;
         }
-        var encodedSlot = ((PatternEncodingTermMenuAccessor) (Object) menu)
-                .eap$getEncodedPatternSlot();
+
+        var encodedSlot = ((PatternEncodingTermMenuAccessor) (Object) menu).eap$getEncodedPatternSlot();
         ItemStack stack = encodedSlot.getItem();
         if (stack.isEmpty() || !PatternDetailsHelper.isEncodedPattern(stack)) {
             return false;
@@ -129,13 +78,12 @@ public final class ProviderUploadUtil {
         if (accessMenu == null) {
             return false;
         }
-        // 先确定目标容器名称，用于同名回退
+
         String targetName = PatternProviderDataUtil.getProviderDisplayName(providerId, accessMenu);
-        // 构建尝试顺序：先指定ID，其次同名的其他ID
-        java.util.List<Long> tryIds = new java.util.ArrayList<>();
+        List<Long> tryIds = new ArrayList<>();
         tryIds.add(providerId);
         try {
-            java.util.List<Long> all = PatternTerminalUtil.getAllProviderIds(accessMenu);
+            List<Long> all = PatternTerminalUtil.getAllProviderIds(accessMenu);
             for (Long id : all) {
                 if (id == null || id == providerId) continue;
                 String name = PatternProviderDataUtil.getProviderDisplayName(id, accessMenu);
@@ -143,78 +91,40 @@ public final class ProviderUploadUtil {
                     tryIds.add(id);
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
 
-        // 按顺序逐个尝试插入
         for (Long id : tryIds) {
             PatternContainer c = PatternTerminalUtil.getPatternContainerById(accessMenu, id);
             if (c == null || !c.isVisibleInTerminal()) continue;
             InternalInventory inv = c.getTerminalPatternInventory();
             if (inv == null || inv.size() <= 0) continue;
 
-            var filtered = new FilteredInternalInventory(inv, new ExtendedAEPatternFilter());
-            ItemStack toInsert = stack.copy();
-            ItemStack remain = filtered.addItems(toInsert);
-            if (remain.getCount() < toInsert.getCount()) {
-                int inserted = toInsert.getCount() - remain.getCount();
-                stack.shrink(inserted);
-                if (stack.isEmpty()) {
-                    encodedSlot.set(ItemStack.EMPTY);
-                } else {
-                    encodedSlot.set(stack);
-                }
+            if (insertIntoInventoryAndShrinkEncodingSlot(inv, encodedSlot, stack)) {
                 return true;
             }
         }
         return false;
     }
 
-    /**
-     * 基于“索引”的定向上传：使用 listAvailableProvidersFromGrid(menu) 的顺序，
-     * 将编码槽样板插入到第 index 个供应器。
-     */
     public static boolean uploadFromEncodingMenuToProviderByIndex(ServerPlayer player, PatternEncodingTermMenu menu, int index) {
         if (player == null || menu == null || index < 0) return false;
         List<PatternContainer> list = PatternTerminalUtil.listAvailableProvidersFromGrid(menu);
         if (index >= list.size()) return false;
-        var container = list.get(index);
+        PatternContainer container = list.get(index);
         if (container == null) return false;
 
-        var encodedSlot = ((PatternEncodingTermMenuAccessor) (Object) menu)
-                .eap$getEncodedPatternSlot();
+        var encodedSlot = ((PatternEncodingTermMenuAccessor) (Object) menu).eap$getEncodedPatternSlot();
         ItemStack stack = encodedSlot.getItem();
         if (stack.isEmpty() || !PatternDetailsHelper.isEncodedPattern(stack)) {
             return false;
         }
 
-        // 以名称为键，同名供应器依次尝试：先 index 指定的，再同名的其他
-        String targetName = PatternProviderDataUtil.getProviderDisplayName(container);
-        java.util.List<PatternContainer> tryList = new java.util.ArrayList<>();
-        tryList.add(container);
-        try {
-            for (PatternContainer c : list) {
-                if (c == null || c == container) continue;
-                String name = PatternProviderDataUtil.getProviderDisplayName(c);
-                if (name != null && name.equals(targetName)) {
-                    tryList.add(c);
-                }
-            }
-        } catch (Throwable ignored) {}
-
+        List<PatternContainer> tryList = buildSameNameTryList(list, container);
         for (PatternContainer c : tryList) {
             InternalInventory inv = c.getTerminalPatternInventory();
             if (inv == null || inv.size() <= 0) continue;
-            var filtered = new FilteredInternalInventory(inv, new ExtendedAEPatternFilter());
-            ItemStack toInsert = stack.copy();
-            ItemStack remain = filtered.addItems(toInsert);
-            if (remain.getCount() < toInsert.getCount()) {
-                int inserted = toInsert.getCount() - remain.getCount();
-                stack.shrink(inserted);
-                if (stack.isEmpty()) {
-                    encodedSlot.set(ItemStack.EMPTY);
-                } else {
-                    encodedSlot.set(stack);
-                }
+            if (insertIntoInventoryAndShrinkEncodingSlot(inv, encodedSlot, stack)) {
                 return true;
             }
         }
@@ -222,9 +132,206 @@ public final class ProviderUploadUtil {
     }
 
     /**
-     * ExtendedAE兼容的样板过滤器
-     * 使用AE2的PatternDetailsHelper进行样板验证
+     * Upload player-inventory pattern to a provider on the player's current wireless network.
+     * providerId is the same encoded id used by provider selection screen fallback: -1-index.
      */
+    public static boolean uploadPatternToProviderFromPlayerNetwork(ServerPlayer player, int playerSlotIndex, long providerId) {
+        if (player == null || playerSlotIndex < 0 || playerSlotIndex >= player.getInventory().getContainerSize()) {
+            return false;
+        }
+
+        ItemStack playerItem = player.getInventory().getItem(playerSlotIndex);
+        if (playerItem.isEmpty() || !PatternDetailsHelper.isEncodedPattern(playerItem)) {
+            return false;
+        }
+
+        var grid = WirelessTerminalGridUtil.findPlayerGrid(player);
+        if (grid == null) {
+            return false;
+        }
+
+        List<PatternContainer> list = PatternTerminalUtil.listAvailableProvidersFromGrid(grid);
+        int index = decodeProviderIndex(providerId);
+        if (index < 0 || index >= list.size()) {
+            return false;
+        }
+
+        PatternContainer target = list.get(index);
+        if (target == null) {
+            return false;
+        }
+
+        for (PatternContainer c : buildSameNameTryList(list, target)) {
+            InternalInventory inv = c.getTerminalPatternInventory();
+            if (inv == null || inv.size() <= 0) continue;
+
+            if (insertIntoInventoryAndShrinkPlayerStack(inv, playerItem, () -> {
+                if (playerItem.isEmpty()) {
+                    player.getInventory().setItem(playerSlotIndex, ItemStack.EMPTY);
+                }
+            })) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static boolean openProviderSelectionForPlayerNetwork(ServerPlayer player) {
+        if (player == null) {
+            return false;
+        }
+        var grid = WirelessTerminalGridUtil.findPlayerGrid(player);
+        if (grid == null) {
+            return false;
+        }
+
+        List<PatternContainer> containers = PatternTerminalUtil.listAvailableProvidersFromGrid(grid);
+        List<Long> ids = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        List<Integer> slots = new ArrayList<>();
+        for (int i = 0; i < containers.size(); i++) {
+            PatternContainer c = containers.get(i);
+            if (c == null) continue;
+            int empty = PatternProviderDataUtil.getAvailableSlots(c);
+            if (empty <= 0) continue;
+            long encodedId = -1L - i;
+            ids.add(encodedId);
+            names.add(PatternProviderDataUtil.getProviderDisplayName(c));
+            slots.add(empty);
+        }
+
+        if (ids.isEmpty()) {
+            return false;
+        }
+
+        ModNetwork.CHANNEL.sendTo(
+            new ProvidersListS2CPacket(ids, names, slots),
+            player.connection.connection,
+            net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
+        );
+        return true;
+    }
+
+    public static String beginPendingCtrlQUpload(ServerPlayer player, ItemStack pattern) {
+        if (player == null || pattern == null || pattern.isEmpty()) {
+            return null;
+        }
+
+        clearPendingCtrlQUpload(player);
+        String id = UUID.randomUUID().toString();
+        ItemStack copy = pattern.copy();
+        copy.getOrCreateTag().putString(PENDING_TAG_KEY, id);
+        if (!player.getInventory().add(copy)) {
+            return null;
+        }
+        player.getPersistentData().putString(PENDING_DATA_KEY, id);
+        return id;
+    }
+
+    public static void clearPendingCtrlQUpload(ServerPlayer player) {
+        if (player == null) return;
+
+        player.getPersistentData().remove(PENDING_DATA_KEY);
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.isEmpty() || stack.getTag() == null) continue;
+            if (stack.getTag().contains(PENDING_TAG_KEY)) {
+                stack.getTag().remove(PENDING_TAG_KEY);
+                if (stack.getTag().isEmpty()) {
+                    stack.setTag(null);
+                }
+            }
+        }
+    }
+
+    public static boolean uploadPendingCtrlQPattern(ServerPlayer player, long providerId) {
+        if (player == null) {
+            return false;
+        }
+        int slot = findPendingCtrlQPatternSlot(player);
+        if (slot < 0) {
+            return false;
+        }
+        boolean ok = uploadPatternToProviderFromPlayerNetwork(player, slot, providerId);
+        if (ok) {
+            clearPendingCtrlQUpload(player);
+        }
+        return ok;
+    }
+
+    private static int findPendingCtrlQPatternSlot(ServerPlayer player) {
+        String id = player.getPersistentData().getString(PENDING_DATA_KEY);
+        if (id == null || id.isBlank()) {
+            return -1;
+        }
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.isEmpty() || !PatternDetailsHelper.isEncodedPattern(stack) || stack.getTag() == null) {
+                continue;
+            }
+            String tagId = stack.getTag().getString(PENDING_TAG_KEY);
+            if (id.equals(tagId)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int decodeProviderIndex(long providerId) {
+        if (providerId < 0) {
+            long idx = -1L - providerId;
+            return idx > Integer.MAX_VALUE ? -1 : (int) idx;
+        }
+        return -1;
+    }
+
+    private static List<PatternContainer> buildSameNameTryList(List<PatternContainer> list, PatternContainer target) {
+        String targetName = PatternProviderDataUtil.getProviderDisplayName(target);
+        List<PatternContainer> tryList = new ArrayList<>();
+        tryList.add(target);
+        for (PatternContainer c : list) {
+            if (c == null || c == target) continue;
+            String name = PatternProviderDataUtil.getProviderDisplayName(c);
+            if (name != null && name.equals(targetName)) {
+                tryList.add(c);
+            }
+        }
+        return tryList;
+    }
+
+    private static boolean insertIntoInventoryAndShrinkEncodingSlot(InternalInventory targetInventory,
+                                                                     net.minecraft.world.inventory.Slot encodedSlot,
+                                                                     ItemStack stackInSlot) {
+        ItemStack toInsert = stackInSlot.copy();
+        ItemStack remain = new FilteredInternalInventory(targetInventory, new ExtendedAEPatternFilter()).addItems(toInsert);
+        if (remain.getCount() >= toInsert.getCount()) {
+            return false;
+        }
+
+        int inserted = toInsert.getCount() - remain.getCount();
+        stackInSlot.shrink(inserted);
+        encodedSlot.set(stackInSlot.isEmpty() ? ItemStack.EMPTY : stackInSlot);
+        return true;
+    }
+
+    private static boolean insertIntoInventoryAndShrinkPlayerStack(InternalInventory targetInventory,
+                                                                    ItemStack playerStack,
+                                                                    Runnable writeBackAfterShrink) {
+        ItemStack toInsert = playerStack.copy();
+        ItemStack remain = new FilteredInternalInventory(targetInventory, new ExtendedAEPatternFilter()).addItems(toInsert);
+        if (remain.getCount() >= toInsert.getCount()) {
+            return false;
+        }
+
+        int inserted = toInsert.getCount() - remain.getCount();
+        playerStack.shrink(inserted);
+        writeBackAfterShrink.run();
+        return true;
+    }
+
     private static class ExtendedAEPatternFilter implements IAEItemFilter {
         @Override
         public boolean allowExtract(InternalInventory inv, int slot, int amount) {

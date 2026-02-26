@@ -1,11 +1,5 @@
 package com.extendedae_plus.network.pattern;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.Supplier;
-
-import com.extendedae_plus.util.wireless.WirelessTerminalLocator;
-
 import appeng.api.crafting.PatternDetailsHelper;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.energy.IEnergyService;
@@ -17,6 +11,9 @@ import appeng.core.definitions.AEItems;
 import appeng.items.tools.powered.WirelessCraftingTerminalItem;
 import appeng.items.tools.powered.WirelessTerminalItem;
 import appeng.me.helpers.PlayerSource;
+import com.extendedae_plus.util.uploadPattern.MatrixUploadUtil;
+import com.extendedae_plus.util.uploadPattern.ProviderUploadUtil;
+import com.extendedae_plus.util.wireless.WirelessTerminalLocator;
 import de.mari_023.ae2wtlib.terminal.WTMenuHost;
 import de.mari_023.ae2wtlib.wut.WTDefinition;
 import de.mari_023.ae2wtlib.wut.WUTHandler;
@@ -29,24 +26,35 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.item.crafting.SmithingRecipe;
+import net.minecraft.world.item.crafting.StonecutterRecipe;
 import net.minecraftforge.network.NetworkEvent;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Supplier;
+
 /**
- * C2S: Ctrl+Q快速创建样板数据包
- *
- * <p>
- * 从客户端发送配方ID和选择的材料到服务器，服务器消耗空白样板并创建编码样板掉落到玩家脚下</p>
+ * C2S: Ctrl+Q 快速创建样板。
  */
 public class CreateCtrlQPatternC2SPacket {
 
     private final ResourceLocation recipeId;
     private final boolean isCraftingPattern;
     private final List<ItemStack> selectedIngredients;
+    private final boolean fromRecipeTypeBookmark;
 
     public CreateCtrlQPatternC2SPacket(ResourceLocation recipeId, boolean isCraftingPattern, List<ItemStack> selectedIngredients) {
+        this(recipeId, isCraftingPattern, selectedIngredients, false);
+    }
+
+    public CreateCtrlQPatternC2SPacket(ResourceLocation recipeId, boolean isCraftingPattern, List<ItemStack> selectedIngredients, boolean fromRecipeTypeBookmark) {
         this.recipeId = recipeId;
         this.isCraftingPattern = isCraftingPattern;
         this.selectedIngredients = selectedIngredients;
+        this.fromRecipeTypeBookmark = fromRecipeTypeBookmark;
     }
 
     public static void encode(CreateCtrlQPatternC2SPacket msg, FriendlyByteBuf buf) {
@@ -56,6 +64,7 @@ public class CreateCtrlQPatternC2SPacket {
         for (ItemStack stack : msg.selectedIngredients) {
             buf.writeItem(stack);
         }
+        buf.writeBoolean(msg.fromRecipeTypeBookmark);
     }
 
     public static CreateCtrlQPatternC2SPacket decode(FriendlyByteBuf buf) {
@@ -66,7 +75,8 @@ public class CreateCtrlQPatternC2SPacket {
         for (int i = 0; i < count; i++) {
             ingredients.add(buf.readItem());
         }
-        return new CreateCtrlQPatternC2SPacket(recipeId, isCraftingPattern, ingredients);
+        boolean fromRecipeTypeBookmark = buf.readBoolean();
+        return new CreateCtrlQPatternC2SPacket(recipeId, isCraftingPattern, ingredients, fromRecipeTypeBookmark);
     }
 
     public static void handle(CreateCtrlQPatternC2SPacket msg, Supplier<NetworkEvent.Context> ctxSupplier) {
@@ -77,64 +87,85 @@ public class CreateCtrlQPatternC2SPacket {
                 return;
             }
 
-            // 1. 验证配方存在
             RecipeManager recipeManager = player.level().getRecipeManager();
             var recipeOpt = recipeManager.byKey(msg.recipeId);
-
             if (recipeOpt.isEmpty()) {
-                player.displayClientMessage(
-                        Component.translatable("message.extendedae_plus.recipe_not_found"),
-                        false
-                );
+                player.displayClientMessage(Component.translatable("message.extendedae_plus.recipe_not_found"), false);
                 return;
             }
-
             Recipe<?> recipe = recipeOpt.get();
 
-            // 2. 消耗空白样板
             if (!consumeBlankPattern(player)) {
-                player.displayClientMessage(
-                        Component.translatable("message.extendedae_plus.no_blank_pattern"),
-                        false
-                );
+                player.displayClientMessage(Component.translatable("message.extendedae_plus.no_blank_pattern"), false);
                 return;
             }
 
-            // 3. 创建样板
             ItemStack pattern = createPattern(recipe, msg.isCraftingPattern, msg.selectedIngredients, player);
-
             if (pattern.isEmpty()) {
-                // 创建失败，退还空白样板
                 player.getInventory().add(AEItems.BLANK_PATTERN.stack());
-                player.displayClientMessage(
-                        Component.translatable("message.extendedae_plus.pattern_creation_failed"),
-                        false
-                );
+                player.displayClientMessage(Component.translatable("message.extendedae_plus.pattern_creation_failed"), false);
                 return;
             }
 
-            // 4. 交付样板：优先放入背包，满了再掉落
+            if (msg.fromRecipeTypeBookmark) {
+                handleRecipeBookmarkFlow(player, recipe, pattern);
+                return;
+            }
+
             if (!player.getInventory().add(pattern)) {
                 player.drop(pattern, false);
             }
-
         });
         ctx.setPacketHandled(true);
     }
 
-    /**
-     * 消耗空白样板：优先从AE网络提取，网络无货才从玩家背包消耗
-     *
-     * @param player 玩家
-     * @return 是否成功消耗
-     */
+    private static void handleRecipeBookmarkFlow(ServerPlayer player, Recipe<?> recipe, ItemStack pattern) {
+        if (isMatrixRecipeType(recipe)) {
+            MatrixUploadUtil.MatrixUploadStatus status = MatrixUploadUtil.uploadPatternToMatrixFromPlayerNetwork(player, pattern.copy());
+            if (status == MatrixUploadUtil.MatrixUploadStatus.SUCCESS) {
+                return;
+            }
+
+            if (!player.getInventory().add(pattern)) {
+                player.drop(pattern, false);
+            }
+
+            if (status == MatrixUploadUtil.MatrixUploadStatus.NO_MATRIX
+                || status == MatrixUploadUtil.MatrixUploadStatus.NO_NETWORK) {
+                player.displayClientMessage(Component.translatable("extendedae_plus.upload_to_matrix.fail_no_matrix"), false);
+            } else if (status == MatrixUploadUtil.MatrixUploadStatus.DUPLICATE) {
+                player.displayClientMessage(Component.translatable("extendedae_plus.upload_to_matrix.repetition"), false);
+            } else {
+                player.displayClientMessage(Component.translatable("extendedae_plus.upload_to_matrix.fail_full"), false);
+            }
+            return;
+        }
+
+        String pendingId = ProviderUploadUtil.beginPendingCtrlQUpload(player, pattern);
+        if (pendingId == null) {
+            if (!player.getInventory().add(pattern)) {
+                player.drop(pattern, false);
+            }
+            return;
+        }
+
+        if (!ProviderUploadUtil.openProviderSelectionForPlayerNetwork(player)) {
+            ProviderUploadUtil.clearPendingCtrlQUpload(player);
+            player.displayClientMessage(Component.translatable("message.extendedae_plus.no_provider_found"), false);
+        }
+    }
+
+    private static boolean isMatrixRecipeType(Recipe<?> recipe) {
+        return recipe instanceof CraftingRecipe
+            || recipe instanceof StonecutterRecipe
+            || recipe instanceof SmithingRecipe;
+    }
+
     private static boolean consumeBlankPattern(ServerPlayer player) {
-        // 1. 尝试从AE网络提取（需要玩家持有无线终端）
         if (tryExtractFromNetwork(player)) {
             return true;
         }
 
-        // 2. 网络提取失败，从背包消耗
         Inventory inventory = player.getInventory();
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
@@ -144,27 +175,19 @@ public class CreateCtrlQPatternC2SPacket {
             }
         }
 
-        return false; // 未找到
+        return false;
     }
 
-    /**
-     * 尝试从AE网络提取空白样板
-     *
-     * @param player 玩家
-     * @return 是否成功提取
-     */
     private static boolean tryExtractFromNetwork(ServerPlayer player) {
-        // 定位玩家身上的无线终端
         WirelessTerminalLocator.LocatedTerminal located = WirelessTerminalLocator.find(player);
         ItemStack terminal = located.stack;
         if (terminal.isEmpty()) {
-            return false; // 没有无线终端
+            return false;
         }
 
         IGrid grid;
         boolean usedWtHost;
 
-        // 若来自 Curios：优先通过 ae2wtlib 的 WTMenuHost 获取量子桥网络
         String curiosSlotId = located.getCuriosSlotId();
         int curiosIndex = located.getCuriosIndex();
 
@@ -172,161 +195,197 @@ public class CreateCtrlQPatternC2SPacket {
             try {
                 String current = WUTHandler.getCurrentTerminal(terminal);
                 WTDefinition def = WUTHandler.wirelessTerminals.get(current);
-                if (def != null) {
-                    WTMenuHost wtHost = def.wTMenuHostFactory().create(player, null, terminal, (p, sub) -> {
-                    });
-                    if (wtHost != null) {
-                        var node = wtHost.getActionableNode();
-                        if (node != null) {
-                            grid = node.getGrid();
-                            if (grid != null && wtHost.drainPower()) {
-                                usedWtHost = true;
-                            } else {
-                                return false;
-                            }
-                        } else {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                } else {
+                if (def == null) {
                     return false;
                 }
+                WTMenuHost wtHost = def.wTMenuHostFactory().create(player, null, terminal, (p, sub) -> {
+                });
+                if (wtHost == null) {
+                    return false;
+                }
+                var node = wtHost.getActionableNode();
+                if (node == null) {
+                    return false;
+                }
+                grid = node.getGrid();
+                if (grid == null || !wtHost.drainPower()) {
+                    return false;
+                }
+                usedWtHost = true;
             } catch (Exception e) {
                 return false;
             }
         } else {
-            // 非 Curios：按 AE2 原生路径处理
             WirelessCraftingTerminalItem wct = terminal.getItem() instanceof WirelessCraftingTerminalItem c ? c : null;
             WirelessTerminalItem wt = wct != null ? wct : (terminal.getItem() instanceof WirelessTerminalItem t ? t : null);
             if (wt == null) {
                 return false;
             }
             grid = wt.getLinkedGrid(terminal, player.serverLevel(), player);
-            if (grid == null) {
+            if (grid == null || !wt.hasPower(player, 0.5, terminal)) {
                 return false;
-            }
-            if (!wt.hasPower(player, 0.5, terminal)) {
-                return false; // 能量不足
             }
             usedWtHost = false;
         }
 
-        // 从网络提取空白样板
         AEItemKey blankPatternKey = AEItemKey.of(AEItems.BLANK_PATTERN.stack());
         IEnergyService energy = grid.getEnergyService();
         MEStorage storage = grid.getStorageService().getInventory();
+        long extracted = StorageHelper.poweredExtraction(energy, storage, blankPatternKey, 1, new PlayerSource(player));
 
-        long extracted = StorageHelper.poweredExtraction(
-                energy,
-                storage,
-                blankPatternKey,
-                1, // 只提取1个
-                new PlayerSource(player)
-        );
-
-        if (extracted > 0) {
-            // 提取成功，消耗无线终端能量
-            if (usedWtHost) {
-                // WTMenuHost 已在 drainPower 中处理能量消耗
-            } else {
-                // 原生 AE2 扣能
-                WirelessCraftingTerminalItem wct2 = terminal.getItem() instanceof WirelessCraftingTerminalItem c2 ? c2 : null;
-                WirelessTerminalItem wt2 = wct2 != null ? wct2 : (terminal.getItem() instanceof WirelessTerminalItem t2 ? t2 : null);
-                if (wt2 != null) {
-                    wt2.usePower(player, 0.5, terminal);
-                }
-            }
-            // 确保写回终端（若位于 Curios 等需要显式写回的容器）
-            located.commit();
-            return true;
+        if (extracted <= 0) {
+            return false;
         }
 
-        return false; // 网络中没有空白样板
+        if (!usedWtHost) {
+            WirelessCraftingTerminalItem wct2 = terminal.getItem() instanceof WirelessCraftingTerminalItem c2 ? c2 : null;
+            WirelessTerminalItem wt2 = wct2 != null ? wct2 : (terminal.getItem() instanceof WirelessTerminalItem t2 ? t2 : null);
+            if (wt2 != null) {
+                wt2.usePower(player, 0.5, terminal);
+            }
+        }
+        located.commit();
+        return true;
     }
 
-    /**
-     * 从配方创建样板
-     *
-     * @param recipe 配方
-     * @param isCrafting 是否为合成样板
-     * @param selectedIngredients 客户端选择的材料（应用JEI优先级后）
-     * @param player 玩家
-     * @return 编码的样板物品
-     */
     private static ItemStack createPattern(Recipe<?> recipe, boolean isCrafting, List<ItemStack> selectedIngredients, ServerPlayer player) {
         try {
-            if (isCrafting && recipe instanceof CraftingRecipe craftingRecipe) {
-                // ===== 合成样板创建路径 =====
-
-                // 准备9格工作台输入（3x3布局）
+            if (isCrafting && recipe instanceof CraftingRecipe) {
                 ItemStack[] inputs = new ItemStack[9];
                 for (int i = 0; i < 9; i++) {
-                    if (i < selectedIngredients.size()) {
-                        inputs[i] = selectedIngredients.get(i).copy();
-                    } else {
-                        inputs[i] = ItemStack.EMPTY;
-                    }
+                    inputs[i] = i < selectedIngredients.size() ? selectedIngredients.get(i).copy() : ItemStack.EMPTY;
                 }
-
-                // 准备输出
                 ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
-
-                // 使用 encodeCraftingPattern 创建合成样板
-                // 直接传递 CraftingRecipe 对象而非 RecipeHolder
-                ItemStack encodedPattern = PatternDetailsHelper.encodeCraftingPattern(
-                        craftingRecipe,
-                        inputs,
-                        output,
-                        true, // allowSubstitutes - 允许替代材料
-                        false // allowFluidSubstitutes - 不允许流体替代
+                ItemStack encoded = invokePatternEncode(
+                    "encodeCraftingPattern",
+                    recipe,
+                    inputs,
+                    output,
+                    true,
+                    false
                 );
-
-                // 添加编码玩家信息到NBT
-                encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
-
-                return encodedPattern;
-
-            } else {
-                // ===== 处理样板创建路径 =====
-
-                List<GenericStack> inputs = new ArrayList<>();
-                List<GenericStack> outputs = new ArrayList<>();
-
-                // 处理输入 - 使用客户端传入的材料选择
-                for (ItemStack item : selectedIngredients) {
-                    if (!item.isEmpty()) {
-                        inputs.add(new GenericStack(
-                                AEItemKey.of(item),
-                                item.getCount()
-                        ));
-                    }
+                if (!encoded.isEmpty()) {
+                    encoded.getOrCreateTag().putString("encodePlayer", player.getName().getString());
                 }
-
-                // 处理输出
-                ItemStack result = recipe.getResultItem(player.level().registryAccess());
-                if (!result.isEmpty()) {
-                    outputs.add(new GenericStack(
-                            AEItemKey.of(result),
-                            result.getCount()
-                    ));
-                }
-
-                // 使用 encodeProcessingPattern 创建处理样板
-                ItemStack encodedPattern = PatternDetailsHelper.encodeProcessingPattern(
-                        inputs.toArray(new GenericStack[0]),
-                        outputs.toArray(new GenericStack[0])
-                );
-
-                // 添加编码玩家信息到NBT
-                encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
-
-                return encodedPattern;
+                return encoded;
             }
 
+            if (recipe instanceof StonecutterRecipe) {
+                ItemStack input = selectedIngredients.isEmpty() ? ItemStack.EMPTY : selectedIngredients.get(0);
+                ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
+                if (input.isEmpty() || output.isEmpty()) {
+                    return ItemStack.EMPTY;
+                }
+                ItemStack encoded = invokePatternEncode(
+                    "encodeStonecuttingPattern",
+                    recipe,
+                    AEItemKey.of(input),
+                    AEItemKey.of(output),
+                    true
+                );
+                if (!encoded.isEmpty()) {
+                    encoded.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+                }
+                return encoded;
+            }
+
+            if (recipe instanceof SmithingRecipe) {
+                ItemStack template = selectedIngredients.size() > 0 ? selectedIngredients.get(0) : ItemStack.EMPTY;
+                ItemStack base = selectedIngredients.size() > 1 ? selectedIngredients.get(1) : ItemStack.EMPTY;
+                ItemStack addition = selectedIngredients.size() > 2 ? selectedIngredients.get(2) : ItemStack.EMPTY;
+                ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
+                if (template.isEmpty() || base.isEmpty() || addition.isEmpty() || output.isEmpty()) {
+                    return ItemStack.EMPTY;
+                }
+                ItemStack encoded = invokePatternEncode(
+                    "encodeSmithingTablePattern",
+                    recipe,
+                    AEItemKey.of(template),
+                    AEItemKey.of(base),
+                    AEItemKey.of(addition),
+                    AEItemKey.of(output),
+                    true
+                );
+                if (!encoded.isEmpty()) {
+                    encoded.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+                }
+                return encoded;
+            }
+
+            List<GenericStack> inputs = new ArrayList<>();
+            List<GenericStack> outputs = new ArrayList<>();
+            for (ItemStack item : selectedIngredients) {
+                if (!item.isEmpty()) {
+                    inputs.add(new GenericStack(AEItemKey.of(item), item.getCount()));
+                }
+            }
+
+            ItemStack result = recipe.getResultItem(player.level().registryAccess());
+            if (!result.isEmpty()) {
+                outputs.add(new GenericStack(AEItemKey.of(result), result.getCount()));
+            }
+
+            ItemStack encodedPattern = PatternDetailsHelper.encodeProcessingPattern(
+                inputs.toArray(new GenericStack[0]),
+                outputs.toArray(new GenericStack[0])
+            );
+            encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+            return encodedPattern;
         } catch (Exception e) {
             return ItemStack.EMPTY;
         }
+    }
+
+    private static ItemStack invokePatternEncode(String methodName, Recipe<?> recipe, Object... args) {
+        try {
+            for (Method method : PatternDetailsHelper.class.getMethods()) {
+                if (!method.getName().equals(methodName)) {
+                    continue;
+                }
+                Class<?>[] parameterTypes = method.getParameterTypes();
+                if (parameterTypes.length != args.length + 1) {
+                    continue;
+                }
+                Object recipeArg = adaptRecipeArgument(parameterTypes[0], recipe);
+                if (recipeArg == null) {
+                    continue;
+                }
+
+                Object[] invokeArgs = new Object[parameterTypes.length];
+                invokeArgs[0] = recipeArg;
+                System.arraycopy(args, 0, invokeArgs, 1, args.length);
+
+                Object result = method.invoke(null, invokeArgs);
+                if (result instanceof ItemStack stack) {
+                    return stack;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return ItemStack.EMPTY;
+    }
+
+    private static Object adaptRecipeArgument(Class<?> expectedType, Recipe<?> recipe) {
+        if (expectedType.isInstance(recipe)) {
+            return recipe;
+        }
+        if (!"net.minecraft.world.item.crafting.RecipeHolder".equals(expectedType.getName())) {
+            return null;
+        }
+
+        try {
+            for (Constructor<?> ctor : expectedType.getDeclaredConstructors()) {
+                Class<?>[] params = ctor.getParameterTypes();
+                if (params.length != 2) {
+                    continue;
+                }
+                if (ResourceLocation.class.isAssignableFrom(params[0]) && params[1].isInstance(recipe)) {
+                    ctor.setAccessible(true);
+                    return ctor.newInstance(recipe.getId(), recipe);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 }

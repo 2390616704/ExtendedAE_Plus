@@ -14,6 +14,7 @@ import appeng.menu.slot.RestrictedInputSlot;
 import com.extendedae_plus.content.matrix.PatternCorePlusBlockEntity;
 import com.extendedae_plus.content.matrix.UploadCoreBlockEntity;
 import com.extendedae_plus.mixin.ae2.accessor.PatternEncodingTermMenuAccessor;
+import com.extendedae_plus.util.wireless.WirelessTerminalGridUtil;
 import com.glodblock.github.extendedae.common.me.matrix.ClusterAssemblerMatrix;
 import com.glodblock.github.extendedae.common.tileentities.matrix.TileAssemblerMatrixPattern;
 import net.minecraft.network.chat.Component;
@@ -34,6 +35,16 @@ import static com.extendedae_plus.util.GlobalSendMessage.sendPlayerMessage;
  */
 public final class MatrixUploadUtil {
     private MatrixUploadUtil() {}
+
+    public enum MatrixUploadStatus {
+        SUCCESS,
+        NOT_ENCODED,
+        UNSUPPORTED_TYPE,
+        NO_NETWORK,
+        NO_MATRIX,
+        DUPLICATE,
+        INSERT_FAILED
+    }
 
     /**
      * 从 AE2 的样板编码终端菜单上传当前“已编码合成样板”至 ExtendedAE 装配矩阵（仅合成样板）
@@ -86,6 +97,54 @@ public final class MatrixUploadUtil {
                 return;
             }
         }
+    }
+
+    /**
+     * 直接将给定样板上传到玩家当前无线终端所在网络的装配矩阵。
+     */
+    public static MatrixUploadStatus uploadPatternToMatrixFromPlayerNetwork(ServerPlayer player, ItemStack pattern) {
+        if (player == null || pattern == null || pattern.isEmpty()) {
+            return MatrixUploadStatus.INSERT_FAILED;
+        }
+        if (!PatternDetailsHelper.isEncodedPattern(pattern)) {
+            return MatrixUploadStatus.NOT_ENCODED;
+        }
+
+        IPatternDetails details = PatternDetailsHelper.decodePattern(pattern, player.level());
+        if (!(details instanceof AECraftingPattern
+            || details instanceof AESmithingTablePattern
+            || details instanceof AEStonecuttingPattern)) {
+            return MatrixUploadStatus.UNSUPPORTED_TYPE;
+        }
+
+        IGrid grid = WirelessTerminalGridUtil.findPlayerGrid(player);
+        if (grid == null) {
+            return MatrixUploadStatus.NO_NETWORK;
+        }
+
+        List<InternalInventory> inventories = findAllMatrixPatternInventories(grid);
+        if (inventories.isEmpty()) {
+            return MatrixUploadStatus.NO_MATRIX;
+        }
+        if (matrixContainsPattern(inventories, pattern)) {
+            return MatrixUploadStatus.DUPLICATE;
+        }
+
+        ItemStack remain = pattern.copy();
+        int original = remain.getCount();
+        for (InternalInventory inv : inventories) {
+            if (inv == null || remain.isEmpty()) {
+                continue;
+            }
+            remain = inv.addItems(remain);
+        }
+
+        if (remain.getCount() < original) {
+            sendPlayerMessage(player, Component.translatable("extendedae_plus.upload_to_matrix.success"));
+            return MatrixUploadStatus.SUCCESS;
+        }
+
+        return MatrixUploadStatus.INSERT_FAILED;
     }
 
     /**

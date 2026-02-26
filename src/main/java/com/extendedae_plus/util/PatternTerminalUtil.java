@@ -158,13 +158,26 @@ public final class PatternTerminalUtil {
      * 返回顺序稳定：按 grid 的 machineClasses 顺序，再按 activeMachines 迭代顺序。
      */
     public static List<PatternContainer> listAvailableProvidersFromGrid(PatternEncodingTermMenu menu) {
-        List<PatternContainer> list = new ArrayList<>();
-        if (menu == null) return list;
+        if (menu == null) return new ArrayList<>();
         try {
             IGridNode node = menu.getNetworkNode();
-            if (node == null) return list;
+            if (node == null) return new ArrayList<>();
             IGrid grid = node.getGrid();
-            if (grid == null) return list;
+            return listAvailableProvidersFromGrid(grid);
+        } catch (Throwable ignored) {
+        }
+        return new ArrayList<>();
+    }
+
+    /**
+     * 基于 AE Grid 遍历，列出“可在终端中可见且有空位”的供应器容器。
+     */
+    public static List<PatternContainer> listAvailableProvidersFromGrid(IGrid grid) {
+        List<PatternContainer> list = new ArrayList<>();
+        if (grid == null) {
+            return list;
+        }
+        try {
             for (var machineClass : grid.getMachineClasses()) {
                 if (PatternContainer.class.isAssignableFrom(machineClass)) {
                     @SuppressWarnings("unchecked")

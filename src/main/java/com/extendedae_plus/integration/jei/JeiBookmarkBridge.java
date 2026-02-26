@@ -9,6 +9,9 @@ import mezz.jei.api.runtime.IBookmarkOverlay;
 import mezz.jei.api.runtime.IJeiRuntime;
 import mezz.jei.gui.bookmarks.BookmarkList;
 import mezz.jei.gui.bookmarks.IngredientBookmark;
+import mezz.jei.gui.bookmarks.RecipeBookmark;
+import mezz.jei.gui.input.MouseUtil;
+import mezz.jei.gui.overlay.bookmarks.BookmarkOverlay;
 import mezz.jei.gui.overlay.elements.IElement;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
@@ -53,6 +56,47 @@ public final class JeiBookmarkBridge {
             return bookmarkList.getElements().stream().map(IElement::getTypedIngredient).toList();
         }
         return Collections.emptyList();
+    }
+
+    public static @Nullable JeiRecipeBookmarkContext getRecipeBookmarkContextUnderMouse() {
+        IJeiRuntime rt = getRuntime();
+        if (rt == null) return null;
+
+        IBookmarkOverlay overlay = rt.getBookmarkOverlay();
+        if (!(overlay instanceof BookmarkOverlay bookmarkOverlay)) {
+            return null;
+        }
+
+        // BookmarkOverlay expects GUI-scaled coordinates, not raw window pixels.
+        double mouseX = MouseUtil.getX();
+        double mouseY = MouseUtil.getY();
+        var hovered = bookmarkOverlay.getIngredientUnderMouse(mouseX, mouseY).findFirst().orElse(null);
+        if (hovered == null) {
+            return null;
+        }
+
+        var bookmark = hovered.getElement().getBookmark().orElse(null);
+        if (!(bookmark instanceof RecipeBookmark<?, ?> recipeBookmark)) {
+            return null;
+        }
+
+        var recipeType = recipeBookmark.getRecipeCategory().getRecipeType();
+        var recipeId = getRecipeId(recipeBookmark);
+        if (recipeType == null || recipeType.getUid() == null || recipeId == null) {
+            return null;
+        }
+
+        return new JeiRecipeBookmarkContext(recipeId, recipeType.getUid());
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static @Nullable net.minecraft.resources.ResourceLocation getRecipeId(RecipeBookmark<?, ?> recipeBookmark) {
+        try {
+            var category = (mezz.jei.api.recipe.category.IRecipeCategory) recipeBookmark.getRecipeCategory();
+            return (net.minecraft.resources.ResourceLocation) category.getRegistryName(recipeBookmark.getRecipe());
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     public static void addBookmark(ItemStack stack) {
