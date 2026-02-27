@@ -13,6 +13,7 @@ import com.extendedae_plus.network.provider.ProvidersListS2CPacket;
 import com.extendedae_plus.util.PatternProviderDataUtil;
 import com.extendedae_plus.util.PatternTerminalUtil;
 import com.extendedae_plus.util.wireless.WirelessTerminalGridUtil;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 
@@ -28,7 +29,7 @@ public final class ProviderUploadUtil {
     }
 
     private static final String PENDING_DATA_KEY = "eap_ctrlq_pending_provider_upload_id";
-    private static final String PENDING_TAG_KEY = "eapCtrlQPendingProviderUploadId";
+    private static final String PENDING_STACK_KEY = "eap_ctrlq_pending_provider_upload_stack";
 
     private static void sendMessage(ServerPlayer player, String message) {
         // Intentionally quiet in normal gameplay.
@@ -220,12 +221,8 @@ public final class ProviderUploadUtil {
 
         clearPendingCtrlQUpload(player);
         String id = UUID.randomUUID().toString();
-        ItemStack copy = pattern.copy();
-        copy.getOrCreateTag().putString(PENDING_TAG_KEY, id);
-        if (!player.getInventory().add(copy)) {
-            return null;
-        }
         player.getPersistentData().putString(PENDING_DATA_KEY, id);
+        player.getPersistentData().put(PENDING_STACK_KEY, pattern.copy().save(new CompoundTag()));
         return id;
     }
 
@@ -233,51 +230,47 @@ public final class ProviderUploadUtil {
         if (player == null) return;
 
         player.getPersistentData().remove(PENDING_DATA_KEY);
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            ItemStack stack = inv.getItem(i);
-            if (stack.isEmpty() || stack.getTag() == null) continue;
-            if (stack.getTag().contains(PENDING_TAG_KEY)) {
-                stack.getTag().remove(PENDING_TAG_KEY);
-                if (stack.getTag().isEmpty()) {
-                    stack.setTag(null);
-                }
-            }
-        }
+        player.getPersistentData().remove(PENDING_STACK_KEY);
     }
 
     public static boolean uploadPendingCtrlQPattern(ServerPlayer player, long providerId) {
         if (player == null) {
             return false;
         }
-        int slot = findPendingCtrlQPatternSlot(player);
-        if (slot < 0) {
+        ItemStack pending = getPendingCtrlQPattern(player);
+        if (pending.isEmpty()) {
             return false;
         }
-        boolean ok = uploadPatternToProviderFromPlayerNetwork(player, slot, providerId);
-        if (ok) {
-            clearPendingCtrlQUpload(player);
+
+        ItemStack remain = insertPatternIntoProviderFromPlayerNetwork(player, pending, providerId);
+        if (remain.getCount() >= pending.getCount()) {
+            return false;
         }
-        return ok;
+
+        if (remain.isEmpty()) {
+            clearPendingCtrlQUpload(player);
+        } else {
+            player.getPersistentData().put(PENDING_STACK_KEY, remain.save(new CompoundTag()));
+        }
+        return true;
     }
 
-    private static int findPendingCtrlQPatternSlot(ServerPlayer player) {
+    private static ItemStack getPendingCtrlQPattern(ServerPlayer player) {
         String id = player.getPersistentData().getString(PENDING_DATA_KEY);
         if (id == null || id.isBlank()) {
-            return -1;
+            return ItemStack.EMPTY;
         }
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            ItemStack stack = inv.getItem(i);
-            if (stack.isEmpty() || !PatternDetailsHelper.isEncodedPattern(stack) || stack.getTag() == null) {
-                continue;
-            }
-            String tagId = stack.getTag().getString(PENDING_TAG_KEY);
-            if (id.equals(tagId)) {
-                return i;
-            }
+
+        CompoundTag data = player.getPersistentData();
+        if (!data.contains(PENDING_STACK_KEY, 10)) {
+            return ItemStack.EMPTY;
         }
-        return -1;
+        ItemStack stack = ItemStack.of(data.getCompound(PENDING_STACK_KEY));
+        if (stack.isEmpty() || !PatternDetailsHelper.isEncodedPattern(stack)) {
+            clearPendingCtrlQUpload(player);
+            return ItemStack.EMPTY;
+        }
+        return stack;
     }
 
     private static int decodeProviderIndex(long providerId) {
@@ -300,6 +293,44 @@ public final class ProviderUploadUtil {
             }
         }
         return tryList;
+    }
+
+    private static ItemStack insertPatternIntoProviderFromPlayerNetwork(ServerPlayer player, ItemStack pattern, long providerId) {
+        if (player == null || pattern == null || pattern.isEmpty() || !PatternDetailsHelper.isEncodedPattern(pattern)) {
+            return pattern == null ? ItemStack.EMPTY : pattern;
+        }
+
+        var grid = WirelessTerminalGridUtil.findPlayerGrid(player);
+        if (grid == null) {
+            return pattern;
+        }
+
+        List<PatternContainer> list = PatternTerminalUtil.listAvailableProvidersFromGrid(grid);
+        int index = decodeProviderIndex(providerId);
+        if (index < 0 || index >= list.size()) {
+            return pattern;
+        }
+
+        PatternContainer target = list.get(index);
+        if (target == null) {
+            return pattern;
+        }
+
+        ItemStack remain = pattern.copy();
+        for (PatternContainer c : buildSameNameTryList(list, target)) {
+            InternalInventory inv = c.getTerminalPatternInventory();
+            if (inv == null || inv.size() <= 0) continue;
+
+            ItemStack nextRemain = new FilteredInternalInventory(inv, new ExtendedAEPatternFilter()).addItems(remain.copy());
+            if (nextRemain.getCount() < remain.getCount()) {
+                remain = nextRemain;
+                if (remain.isEmpty()) {
+                    return ItemStack.EMPTY;
+                }
+            }
+        }
+
+        return remain;
     }
 
     private static boolean insertIntoInventoryAndShrinkEncodingSlot(InternalInventory targetInventory,

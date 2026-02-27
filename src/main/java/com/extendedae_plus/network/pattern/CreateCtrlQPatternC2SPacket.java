@@ -17,6 +17,7 @@ import com.extendedae_plus.util.wireless.WirelessTerminalLocator;
 import de.mari_023.ae2wtlib.terminal.WTMenuHost;
 import de.mari_023.ae2wtlib.wut.WTDefinition;
 import de.mari_023.ae2wtlib.wut.WUTHandler;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -40,6 +41,8 @@ import java.util.function.Supplier;
  * C2S: Ctrl+Q 快速创建样板。
  */
 public class CreateCtrlQPatternC2SPacket {
+    private static final String LAST_CTRLQ_HASH_KEY = "eap_ctrlq_last_request_hash";
+    private static final String LAST_CTRLQ_TICK_KEY = "eap_ctrlq_last_request_tick";
 
     private final ResourceLocation recipeId;
     private final boolean isCraftingPattern;
@@ -95,6 +98,10 @@ public class CreateCtrlQPatternC2SPacket {
             }
             Recipe<?> recipe = recipeOpt.get();
 
+            if (isDuplicateRequest(player, msg)) {
+                return;
+            }
+
             if (!consumeBlankPattern(player)) {
                 player.displayClientMessage(Component.translatable("message.extendedae_plus.no_blank_pattern"), false);
                 return;
@@ -126,10 +133,6 @@ public class CreateCtrlQPatternC2SPacket {
                 return;
             }
 
-            if (!player.getInventory().add(pattern)) {
-                player.drop(pattern, false);
-            }
-
             if (status == MatrixUploadUtil.MatrixUploadStatus.NO_MATRIX
                 || status == MatrixUploadUtil.MatrixUploadStatus.NO_NETWORK) {
                 player.displayClientMessage(Component.translatable("extendedae_plus.upload_to_matrix.fail_no_matrix"), false);
@@ -143,9 +146,7 @@ public class CreateCtrlQPatternC2SPacket {
 
         String pendingId = ProviderUploadUtil.beginPendingCtrlQUpload(player, pattern);
         if (pendingId == null) {
-            if (!player.getInventory().add(pattern)) {
-                player.drop(pattern, false);
-            }
+            player.displayClientMessage(Component.translatable("message.extendedae_plus.pattern_creation_failed"), false);
             return;
         }
 
@@ -159,6 +160,44 @@ public class CreateCtrlQPatternC2SPacket {
         return recipe instanceof CraftingRecipe
             || recipe instanceof StonecutterRecipe
             || recipe instanceof SmithingRecipe;
+    }
+
+    private static boolean isDuplicateRequest(ServerPlayer player, CreateCtrlQPatternC2SPacket msg) {
+        long now = player.level().getGameTime();
+        int hash = computeRequestHash(msg);
+
+        var data = player.getPersistentData();
+        long lastTick = data.getLong(LAST_CTRLQ_TICK_KEY);
+        int lastHash = data.getInt(LAST_CTRLQ_HASH_KEY);
+
+        data.putLong(LAST_CTRLQ_TICK_KEY, now);
+        data.putInt(LAST_CTRLQ_HASH_KEY, hash);
+
+        return hash == lastHash && now - lastTick <= 1;
+    }
+
+    private static int computeRequestHash(CreateCtrlQPatternC2SPacket msg) {
+        int hash = 17;
+        hash = 31 * hash + msg.recipeId.hashCode();
+        hash = 31 * hash + (msg.isCraftingPattern ? 1 : 0);
+        hash = 31 * hash + msg.selectedIngredients.size();
+        for (ItemStack stack : msg.selectedIngredients) {
+            hash = 31 * hash + computeStackHash(stack);
+        }
+        // Intentionally ignore fromRecipeTypeBookmark in dedupe to collapse mixed duplicate paths.
+        return hash;
+    }
+
+    private static int computeStackHash(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return 0;
+        }
+        int hash = 17;
+        ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        hash = 31 * hash + (itemId == null ? 0 : itemId.hashCode());
+        hash = 31 * hash + stack.getCount();
+        hash = 31 * hash + (stack.getTag() == null ? 0 : stack.getTag().hashCode());
+        return hash;
     }
 
     private static boolean consumeBlankPattern(ServerPlayer player) {

@@ -23,6 +23,7 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -36,15 +37,22 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Mod.EventBusSubscriber(modid = ExtendedAEPlus.MODID, value = Dist.CLIENT)
 public class CtrlQPatternKeyHandler {
+    private static boolean ctrlQKeyHeld;
 
     @SubscribeEvent
-    public static void onScreenKeyPressed(ScreenEvent.KeyPressed event) {
+    public static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
         int keyCode = event.getKeyCode();
         int scanCode = event.getScanCode();
 
         if (!ModKeybindings.CREATE_PATTERN_KEY.matches(keyCode, scanCode)) {
             return;
         }
+        // Guard against GLFW key-repeat while key is still held down.
+        if (ctrlQKeyHeld) {
+            event.setCanceled(true);
+            return;
+        }
+        ctrlQKeyHeld = true;
 
         if (JeiRuntimeProxy.get() == null) {
             return;
@@ -113,6 +121,13 @@ public class CtrlQPatternKeyHandler {
         ));
 
         event.setCanceled(true);
+    }
+
+    @SubscribeEvent
+    public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
+        if (event.getKeyCode() == GLFW.GLFW_KEY_Q) {
+            ctrlQKeyHeld = false;
+        }
     }
 
     private static boolean isMatrixRecipeType(Recipe<?> recipe) {
