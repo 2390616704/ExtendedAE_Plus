@@ -12,6 +12,7 @@ import com.extendedae_plus.init.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -22,6 +23,9 @@ import net.minecraftforge.items.IItemHandler;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 样板路由器方块实体
@@ -41,6 +45,14 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
     private final IManagedGridNode managedNode;
     private final AppEngInternalInventory patternStorage; // 存储待插入的样板（9个槽位）
     private PatternInsertionManager insertionManager;
+    
+    // 新增：用于检测样板数量变化
+    private int[] lastPatternCounts = new int[9];
+    private long lastCheckTime = 0;
+    private static final long CHECK_INTERVAL = 20; // 20 ticks = 1 second
+    
+    // 新增：用于跟踪未成功发送的样板
+    private List<ItemStack> unsuccessfulPatterns = new ArrayList<>();
 
     // ItemHandler 包装器 - 允许漏斗输入
     private final LazyOptional<IItemHandler> itemHandlerCap;
@@ -172,7 +184,22 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
                 return TickRateModulation.SLEEP;
             }
 
+            // 1. 每秒检查样板数量变化
+            boolean patternChanged = checkPatternQuantityChanges();
+            
+            // 2. 如果样板数量有变化或需要工作，检查相邻容器
+            if (patternChanged || hasWorkToDo()) {
+                checkAdjacentContainers();
+            }
+            
+            // 3. 尝试插入样板
             boolean didWork = tryInsertPatterns();
+            
+            // 4. 如果没有更多工作，汇总未成功发送的样板
+            if (!hasWorkToDo() && !unsuccessfulPatterns.isEmpty()) {
+                summarizeUnsuccessfulPatterns();
+            }
+            
             return hasWorkToDo() ?
                 (didWork ? TickRateModulation.URGENT : TickRateModulation.SLOWER) :
                 TickRateModulation.SLEEP;
@@ -221,7 +248,21 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
                 // 插入成功，从槽位移除
                 patternStorage.setItemDirect(slot, ItemStack.EMPTY);
                 didWork = true;
+                // 从失败列表中移除（如果存在）
+                unsuccessfulPatterns.removeIf(stack -> ItemStack.matches(stack, patternStack));
                 break; // 每 tick 只处理一个，避免卡顿
+            } else {
+                // 插入失败，添加到失败列表（如果尚未存在）
+                boolean alreadyExists = false;
+                for (ItemStack failed : unsuccessfulPatterns) {
+                    if (ItemStack.matches(failed, patternStack)) {
+                        alreadyExists = true;
+                        break;
+                    }
+                }
+                if (!alreadyExists) {
+                    unsuccessfulPatterns.add(patternStack.copy());
+                }
             }
         }
 
@@ -238,6 +279,142 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
         // 检查是否是 AE2 的编码样板
         return stack.getItem() == AEItems.PROCESSING_PATTERN.asItem() ||
                stack.getItem() == AEItems.CRAFTING_PATTERN.asItem();
+    }
+    
+    /**
+     * 检查相邻容器并提取编码样板
+     */
+    private void checkAdjacentContainers() {
+        if (level == null || level.isClientSide) {
+            return;
+        }
+        
+        for (Direction direction : Direction.values()) {
+            BlockPos adjacentPos = worldPosition.relative(direction);
+            BlockEntity adjacentBE = level.getBlockEntity(adjacentPos);
+            if (adjacentBE != null) {
+                // 检查是否有物品处理能力（容器）
+                var cap = adjacentBE.getCapability(ForgeCapabilities.ITEM_HANDLER, direction.getOpposite()).orElse(null);
+                if (cap != null) {
+                    extractPatternsFromContainer(cap);
+                }
+            }
+        }
+    }
+    
+    /**
+     * 从容器中提取编码样板
+     */
+    private void extractPatternsFromContainer(IItemHandler container) {
+        if (container == null) {
+            return;
+        }
+        
+        // 遍历容器所有槽位
+        for (int slot = 0; slot < container.getSlots(); slot++) {
+            ItemStack stack = container.getStackInSlot(slot);
+            if (isEncodedPattern(stack)) {
+                // 尝试将样板转移到路由器存储中
+                ItemStack extracted = container.extractItem(slot, 1, true); // 模拟提取
+                if (!extracted.isEmpty() && isEncodedPattern(extracted)) {
+                    // 实际提取
+                    ItemStack actuallyExtracted = container.extractItem(slot, 1, false);
+                    if (!actuallyExtracted.isEmpty()) {
+                        // 尝试放入路由器存储
+                        boolean stored = false;
+                        for (int routerSlot = 0; routerSlot < patternStorage.size(); routerSlot++) {
+                            if (patternStorage.getStackInSlot(routerSlot).isEmpty()) {
+                                patternStorage.setItemDirect(routerSlot, actuallyExtracted);
+                                stored = true;
+                                setChanged();
+                                break;
+                            }
+                        }
+                        
+                        if (!stored) {
+                            // 路由器存储已满，放回容器
+                            ItemStack remaining = container.insertItem(slot, actuallyExtracted, false);
+                            if (!remaining.isEmpty()) {
+                                // 无法放回，掉落物品
+                                if (level != null) {
+                                    net.minecraft.world.entity.item.ItemEntity itemEntity = new net.minecraft.world.entity.item.ItemEntity(
+                                        level,
+                                        worldPosition.getX() + 0.5,
+                                        worldPosition.getY() + 1.0,
+                                        worldPosition.getZ() + 0.5,
+                                        remaining
+                                    );
+                                    level.addFreshEntity(itemEntity);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * 检查样板数量是否发生变化
+     */
+    private boolean checkPatternQuantityChanges() {
+        if (level == null) {
+            return false;
+        }
+        
+        long currentTime = level.getGameTime();
+        if (currentTime - lastCheckTime < CHECK_INTERVAL) {
+            return false;
+        }
+        
+        lastCheckTime = currentTime;
+        boolean hasChanges = false;
+        
+        // 检查每个槽位的样板数量变化
+        for (int i = 0; i < patternStorage.size(); i++) {
+            ItemStack currentStack = patternStorage.getStackInSlot(i);
+            int currentCount = currentStack.isEmpty() ? 0 : 1; // 样板不堆叠，所以是0或1
+            
+            if (currentCount != lastPatternCounts[i]) {
+                hasChanges = true;
+                lastPatternCounts[i] = currentCount;
+            }
+        }
+        
+        return hasChanges;
+    }
+    
+    /**
+     * 汇总未成功发送的样板
+     */
+    private void summarizeUnsuccessfulPatterns() {
+        if (unsuccessfulPatterns.isEmpty() || level == null || level.isClientSide) {
+            return;
+        }
+        
+        // 向附近玩家发送汇总信息
+        for (net.minecraft.world.entity.player.Player player : level.players()) {
+            if (player.distanceToSqr(worldPosition.getX() + 0.5, worldPosition.getY() + 0.5, worldPosition.getZ() + 0.5) < 64) {
+                Component message = Component.literal("[样板路由器] ").withStyle(net.minecraft.ChatFormatting.YELLOW)
+                    .append(Component.translatable("message.extendedae_plus.router.summary_start").withStyle(net.minecraft.ChatFormatting.WHITE));
+                
+                player.displayClientMessage(message, false);
+                
+                for (ItemStack pattern : unsuccessfulPatterns) {
+                    String patternName = pattern.getHoverName().getString();
+                    Component patternMsg = Component.literal("  - ").withStyle(net.minecraft.ChatFormatting.GRAY)
+                        .append(Component.literal(patternName).withStyle(net.minecraft.ChatFormatting.WHITE));
+                    player.displayClientMessage(patternMsg, false);
+                }
+                
+                Component endMsg = Component.literal("[样板路由器] ").withStyle(net.minecraft.ChatFormatting.YELLOW)
+                    .append(Component.translatable("message.extendedae_plus.router.summary_end", unsuccessfulPatterns.size()).withStyle(net.minecraft.ChatFormatting.WHITE));
+                player.displayClientMessage(endMsg, false);
+            }
+        }
+        
+        // 清空列表
+        unsuccessfulPatterns.clear();
     }
 
     // ========== IInWorldGridNodeHost 实现 ==========

@@ -246,6 +246,10 @@
   "message.extendedae_plus.router.providers_busy": "Pattern [%s]: All matching providers are full or busy. Please wait or add more pattern providers",
   "message.extendedae_plus.router.providers_full": "Pattern [%s]: All matching providers are full. Please add more pattern providers or remove some patterns",
   "message.extendedae_plus.router.pattern_inserted": "Pattern [%s] successfully inserted into pattern provider",
+  "message.extendedae_plus.router.no_adjacent_container": "No adjacent container detected. Pattern router needs adjacent containers to read patterns.",
+  "message.extendedae_plus.router.no_container_to_open": "No adjacent openable container found.",
+  "message.extendedae_plus.router.summary_start": "Work completed, the following patterns were not successfully sent:",
+  "message.extendedae_plus.router.summary_end": "Total %s patterns not successfully sent.",
 
   "extendedae_plus.pattern_suffix.crafting": "Molecular Assembler",
 

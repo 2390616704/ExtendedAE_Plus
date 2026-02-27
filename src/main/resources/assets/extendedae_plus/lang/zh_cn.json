@@ -245,6 +245,10 @@
   "message.extendedae_plus.router.providers_busy": "样板 [%s] 的所有匹配供应器都已满或繁忙。请等待或添加更多样板供应器",
   "message.extendedae_plus.router.providers_full": "样板 [%s] 的所有匹配供应器都已满。请添加更多样板供应器或移除一些样板",
   "message.extendedae_plus.router.pattern_inserted": "样板 [%s] 已成功插入样板供应器",
+  "message.extendedae_plus.router.no_adjacent_container": "未检测到相邻容器。样板路由器需要相邻容器来读取样板。",
+  "message.extendedae_plus.router.no_container_to_open": "未找到相邻的可打开容器。",
+  "message.extendedae_plus.router.summary_start": "工作完成，以下样板未成功发送：",
+  "message.extendedae_plus.router.summary_end": "总计 %s 个样板未成功发送。",
 
   "extendedae_plus.pattern_suffix.crafting": "分子装配室",
 
