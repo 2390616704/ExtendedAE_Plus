@@ -1,20 +1,31 @@
 package com.extendedae_plus.util;
 
+import com.extendedae_plus.integration.jei.JeiRuntimeProxy;
 import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.ingredients.ITypedIngredient;
+import mezz.jei.api.recipe.IFocus;
+import mezz.jei.api.recipe.IFocusFactory;
+import mezz.jei.api.recipe.IRecipeManager;
+import mezz.jei.api.recipe.RecipeIngredientRole;
+import mezz.jei.api.recipe.RecipeType;
+import mezz.jei.api.recipe.category.IRecipeCategory;
+import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
-import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 public final class RecipeFinderUtil {
     private static final Logger LOGGER = LoggerFactory.getLogger("ExtendedAE Plus - RecipeFinder");
@@ -38,10 +49,12 @@ public final class RecipeFinderUtil {
         if (ingredient == null || level == null) {
             return List.of();
         }
+
         ItemStack target = extractItemStackFromTypedIngredient(ingredient);
         if (target.isEmpty()) {
             return List.of();
         }
+
         return findRecipesByOutputItem(target, level);
     }
 
@@ -51,25 +64,25 @@ public final class RecipeFinderUtil {
             return results;
         }
 
+        IJeiRuntime runtime = JeiRuntimeProxy.get();
+        if (runtime == null) {
+            return results;
+        }
+
         try {
-            var recipes = level.getRecipeManager().getRecipes();
+            IRecipeManager recipeManager = runtime.getRecipeManager();
+            IFocusFactory focusFactory = runtime.getJeiHelpers().getFocusFactory();
 
-            for (Recipe<?> recipe : recipes) {
-                if (matchesOutput(recipe, target, level)) {
-                    results.add(recipe);
-                }
-            }
+            Set<ResourceLocation> seenRecipeIds = new LinkedHashSet<>();
+            Set<Recipe<?>> seenNoIdRecipes = Collections.newSetFromMap(new IdentityHashMap<>());
+            ItemStack normalizedTarget = normalizeFocusStack(target);
 
+            collectRecipesByRole(recipeManager, focusFactory, normalizedTarget, RecipeIngredientRole.OUTPUT, results, seenRecipeIds, seenNoIdRecipes);
             if (Screen.hasShiftDown()) {
-                for (Recipe<?> recipe : recipes) {
-                    if (!results.contains(recipe) && matchesInput(recipe, target)) {
-                        results.add(recipe);
-                    }
-                }
+                collectRecipesByRole(recipeManager, focusFactory, normalizedTarget, RecipeIngredientRole.INPUT, results, seenRecipeIds, seenNoIdRecipes);
             }
         } catch (Throwable t) {
-            LOGGER.debug("[RecipeFinder] findRecipesByOutputItem failed: target={}, err={}",
-                describeStack(target), t.toString());
+            LOGGER.debug("[RecipeFinder] JEI recipe query failed: target={}, err={}", describeStack(target), t.toString());
         }
 
         return results;
@@ -91,48 +104,92 @@ public final class RecipeFinderUtil {
         if (typed == null) {
             return ItemStack.EMPTY;
         }
+
         if (typed instanceof ITypedIngredient<?> ingredient) {
             Optional<ItemStack> stack = ingredient.getIngredient(VanillaTypes.ITEM_STACK);
             if (stack.isPresent()) {
                 return stack.get();
             }
         }
-        try {
-            Object ingredient = typed.getClass().getMethod("getIngredient").invoke(typed);
-            if (ingredient instanceof ItemStack stack) {
-                return stack;
-            }
-        } catch (Throwable ignored) {
+
+        if (typed instanceof ItemStack stack) {
+            return stack;
         }
-        try {
-            Object maybe = typed.getClass().getMethod("getItemStack").invoke(typed);
-            if (maybe instanceof Optional<?> opt && opt.isPresent() && opt.get() instanceof ItemStack stack) {
-                return stack;
-            }
-        } catch (Throwable ignored) {
-        }
+
         return ItemStack.EMPTY;
     }
 
-    private static boolean matchesOutput(Recipe<?> recipe, ItemStack target, Level level) {
+    private static void collectRecipesByRole(
+        IRecipeManager recipeManager,
+        IFocusFactory focusFactory,
+        ItemStack target,
+        RecipeIngredientRole role,
+        List<Recipe<?>> results,
+        Set<ResourceLocation> seenRecipeIds,
+        Set<Recipe<?>> seenNoIdRecipes
+    ) {
+        IFocus<ItemStack> focus = focusFactory.createFocus(role, VanillaTypes.ITEM_STACK, target);
+        List<IFocus<?>> focuses = List.of(focus);
+
+        recipeManager.createRecipeCategoryLookup()
+            .limitFocus(focuses)
+            .get()
+            .map(IRecipeCategory::getRecipeType)
+            .distinct()
+            .forEach(recipeType -> collectRecipesForType(recipeManager, recipeType, focuses, results, seenRecipeIds, seenNoIdRecipes));
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static void collectRecipesForType(
+        IRecipeManager recipeManager,
+        RecipeType<?> recipeType,
+        List<IFocus<?>> focuses,
+        List<Recipe<?>> results,
+        Set<ResourceLocation> seenRecipeIds,
+        Set<Recipe<?>> seenNoIdRecipes
+    ) {
         try {
-            ItemStack result = recipe.getResultItem(level.registryAccess());
-            return !result.isEmpty() && ItemStack.isSameItemSameTags(result, target);
-        } catch (Throwable ignored) {
-            return false;
+            RecipeType rawType = recipeType;
+            recipeManager.createRecipeLookup(rawType)
+                .limitFocus(focuses)
+                .get()
+                .forEach(recipeObject -> addIfVanillaRecipe(recipeObject, results, seenRecipeIds, seenNoIdRecipes));
+        } catch (Throwable t) {
+            LOGGER.debug(
+                "[RecipeFinder] JEI lookup failed: type={}, err={}",
+                recipeType == null ? "unknown" : recipeType.getUid(),
+                t.toString()
+            );
         }
     }
 
-    private static boolean matchesInput(Recipe<?> recipe, ItemStack target) {
-        try {
-            for (Ingredient ingredient : recipe.getIngredients()) {
-                if (ingredient.test(target)) {
-                    return true;
-                }
-            }
-        } catch (Throwable ignored) {
+    private static void addIfVanillaRecipe(
+        Object recipeObject,
+        List<Recipe<?>> results,
+        Set<ResourceLocation> seenRecipeIds,
+        Set<Recipe<?>> seenNoIdRecipes
+    ) {
+        if (!(recipeObject instanceof Recipe<?> recipe)) {
+            return;
         }
-        return false;
+
+        ResourceLocation recipeId = recipe.getId();
+        if (recipeId != null) {
+            if (seenRecipeIds.add(recipeId)) {
+                results.add(recipe);
+            }
+            return;
+        }
+
+        if (seenNoIdRecipes.add(recipe)) {
+            results.add(recipe);
+        }
+    }
+
+    private static ItemStack normalizeFocusStack(ItemStack stack) {
+        ItemStack normalized = stack.copy();
+        normalized.setCount(1);
+        return normalized;
     }
 
     private static String describeStack(ItemStack stack) {
