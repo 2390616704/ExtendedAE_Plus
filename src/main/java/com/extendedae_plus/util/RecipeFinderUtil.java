@@ -3,8 +3,10 @@ package com.extendedae_plus.util;
 import mezz.jei.api.constants.VanillaTypes;
 import mezz.jei.api.ingredients.ITypedIngredient;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
@@ -12,119 +14,132 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
-/**
- * 配方查找工具类
- *
- * <p>根据物品查找相关配方，优先返回工作台配方（CraftingRecipe）</p>
- */
-public class RecipeFinderUtil {
+public final class RecipeFinderUtil {
     private static final Logger LOGGER = LoggerFactory.getLogger("ExtendedAE Plus - RecipeFinder");
 
-    /**
-     * 根据JEI物品查找相关配方
-     *
-     * @param ingredient JEI物品
-     * @param level 当前世界
-     * @return 相关配方列表
-     */
-    public static List<Recipe<?>> findRecipesByIngredient(ITypedIngredient<?> ingredient, Level level) {
-        if (ingredient.getType() == VanillaTypes.ITEM_STACK) {
-            ItemStack stack = (ItemStack) ingredient.getIngredient();
-            return findRecipesByItem(stack, level);
-        }
-
-        LOGGER.warn("[RecipeFinder] Unsupported ingredient type: {}", ingredient.getType());
-        // TODO: Support fluids, chemicals, and other AE2-compatible types
-        return List.of();
+    private RecipeFinderUtil() {
     }
 
-    /**
-     * 根据物品查找相关配方
-     *
-     * @param item 目标物品
-     * @param level 当前世界
-     * @return 配方列表
-     */
-    private static List<Recipe<?>> findRecipesByItem(ItemStack item, Level level) {
-        List<Recipe<?>> results = new ArrayList<>();
+    public static Recipe<?> findRecipeById(Level level, ResourceLocation recipeId) {
+        if (level == null || recipeId == null) {
+            return null;
+        }
+        try {
+            return level.getRecipeManager().byKey(recipeId).orElse(null);
+        } catch (Throwable t) {
+            LOGGER.debug("[RecipeFinder] findRecipeById failed: id={}, err={}", recipeId, t.toString());
+            return null;
+        }
+    }
 
-        // 1. 查找以该物品为输出的配方
-        for (Recipe<?> recipe : level.getRecipeManager().getRecipes()) {
-            if (matchesOutput(recipe, item, level)) {
-                results.add(recipe);
-            }
+    public static List<Recipe<?>> findRecipesByIngredient(ITypedIngredient<?> ingredient, Level level) {
+        if (ingredient == null || level == null) {
+            return List.of();
+        }
+        ItemStack target = extractItemStackFromTypedIngredient(ingredient);
+        if (target.isEmpty()) {
+            return List.of();
+        }
+        return findRecipesByOutputItem(target, level);
+    }
+
+    public static List<Recipe<?>> findRecipesByOutputItem(ItemStack target, Level level) {
+        List<Recipe<?>> results = new ArrayList<>();
+        if (level == null || target == null || target.isEmpty()) {
+            return results;
         }
 
-        // 2. 如果按住Shift，也查找以该物品为输入的配方
-        if (Screen.hasShiftDown()) {
-            for (Recipe<?> recipe : level.getRecipeManager().getRecipes()) {
-                if (matchesInput(recipe, item) && !results.contains(recipe)) {
+        try {
+            var recipes = level.getRecipeManager().getRecipes();
+
+            for (Recipe<?> recipe : recipes) {
+                if (matchesOutput(recipe, target, level)) {
                     results.add(recipe);
                 }
             }
-        }
 
-        // 3. 优先级排序: CraftingRecipe优先
-        results.sort((r1, r2) -> {
-            boolean isCrafting1 = r1 instanceof CraftingRecipe;
-            boolean isCrafting2 = r2 instanceof CraftingRecipe;
-            if (isCrafting1 && !isCrafting2) return -1; // r1优先
-            if (!isCrafting1 && isCrafting2) return 1;  // r2优先
-            return 0; // 保持原顺序
-        });
+            if (Screen.hasShiftDown()) {
+                for (Recipe<?> recipe : recipes) {
+                    if (!results.contains(recipe) && matchesInput(recipe, target)) {
+                        results.add(recipe);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.debug("[RecipeFinder] findRecipesByOutputItem failed: target={}, err={}",
+                describeStack(target), t.toString());
+        }
 
         return results;
     }
 
-    /**
-     * 选择最佳配方（优先选择工作台配方）
-     *
-     * @param recipes 配方列表
-     * @return 最佳配方，如果列表为空返回null
-     */
     public static Recipe<?> selectBestRecipe(List<Recipe<?>> recipes) {
-        if (recipes.isEmpty()) {
+        if (recipes == null || recipes.isEmpty()) {
             return null;
         }
-
-        // 优先返回CraftingRecipe
         for (Recipe<?> recipe : recipes) {
             if (recipe instanceof CraftingRecipe) {
                 return recipe;
             }
         }
-
-        // 没有工作台配方，返回第一个
         return recipes.get(0);
     }
 
-    /**
-     * 检查配方输出是否匹配目标物品
-     */
+    public static ItemStack extractItemStackFromTypedIngredient(Object typed) {
+        if (typed == null) {
+            return ItemStack.EMPTY;
+        }
+        if (typed instanceof ITypedIngredient<?> ingredient) {
+            Optional<ItemStack> stack = ingredient.getIngredient(VanillaTypes.ITEM_STACK);
+            if (stack.isPresent()) {
+                return stack.get();
+            }
+        }
+        try {
+            Object ingredient = typed.getClass().getMethod("getIngredient").invoke(typed);
+            if (ingredient instanceof ItemStack stack) {
+                return stack;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            Object maybe = typed.getClass().getMethod("getItemStack").invoke(typed);
+            if (maybe instanceof Optional<?> opt && opt.isPresent() && opt.get() instanceof ItemStack stack) {
+                return stack;
+            }
+        } catch (Throwable ignored) {
+        }
+        return ItemStack.EMPTY;
+    }
+
     private static boolean matchesOutput(Recipe<?> recipe, ItemStack target, Level level) {
         try {
             ItemStack result = recipe.getResultItem(level.registryAccess());
-            if (result.isEmpty()) {
-                return false;
-            }
-            return ItemStack.isSameItemSameTags(result, target);
-        } catch (Exception e) {
-            LOGGER.warn("[RecipeFinder] Exception in matchesOutput for recipe {}: {}", recipe.getId(), e.getMessage());
+            return !result.isEmpty() && ItemStack.isSameItemSameTags(result, target);
+        } catch (Throwable ignored) {
             return false;
         }
     }
 
-    /**
-     * 检查配方输入是否包含目标物品
-     */
     private static boolean matchesInput(Recipe<?> recipe, ItemStack target) {
         try {
-            return recipe.getIngredients().stream()
-                .anyMatch(ingredient -> ingredient.test(target));
-        } catch (Exception e) {
-            LOGGER.warn("[RecipeFinder] Exception in matchesInput for recipe {}: {}", recipe.getId(), e.getMessage());
-            return false;
+            for (Ingredient ingredient : recipe.getIngredients()) {
+                if (ingredient.test(target)) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
         }
+        return false;
+    }
+
+    private static String describeStack(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return "empty";
+        }
+        ResourceLocation itemId = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
+        return (itemId == null ? "unknown" : itemId.toString()) + "x" + stack.getCount();
     }
 }

@@ -23,8 +23,6 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import org.lwjgl.glfw.GLFW;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -67,7 +65,7 @@ public class CtrlQPatternKeyHandler {
         Optional<com.extendedae_plus.integration.jei.JeiRecipeBookmarkContext> recipeBookmark =
             JeiRuntimeProxy.getRecipeBookmarkContextUnderMouse();
 
-        if (ingredient.isEmpty()) {
+        if (ingredient.isEmpty() && recipeBookmark.isEmpty()) {
             if (mc.player != null) {
                 mc.player.displayClientMessage(
                     Component.translatable("message.extendedae_plus.hover_item_first"),
@@ -79,11 +77,14 @@ public class CtrlQPatternKeyHandler {
 
         Recipe<?> selectedRecipe = null;
         if (recipeBookmark.isPresent()) {
-            selectedRecipe = mc.level.getRecipeManager().byKey(recipeBookmark.get().recipeId()).orElse(null);
+            selectedRecipe = RecipeFinderUtil.findRecipeById(mc.level, recipeBookmark.get().recipeId());
         }
 
-        if (selectedRecipe == null) {
+        if (selectedRecipe == null && ingredient.isPresent()) {
             List<Recipe<?>> recipes = RecipeFinderUtil.findRecipesByIngredient(ingredient.get(), mc.level);
+            if (recipes.isEmpty() && recipeBookmark.isPresent()) {
+                recipes = RecipeFinderUtil.findRecipesByOutputItem(recipeBookmark.get().outputPreview(), mc.level);
+            }
             if (recipes.isEmpty()) {
                 if (mc.player != null) {
                     mc.player.displayClientMessage(
@@ -99,9 +100,29 @@ public class CtrlQPatternKeyHandler {
             }
         }
 
+        if (selectedRecipe == null && recipeBookmark.isPresent()) {
+            List<Recipe<?>> recipes = RecipeFinderUtil.findRecipesByOutputItem(recipeBookmark.get().outputPreview(), mc.level);
+            selectedRecipe = RecipeFinderUtil.selectBestRecipe(recipes);
+        }
+
+        if (selectedRecipe == null) {
+            if (mc.player != null) {
+                mc.player.displayClientMessage(
+                    Component.translatable("message.extendedae_plus.no_recipes_found"),
+                    true
+                );
+            }
+            return;
+        }
+
         boolean fromRecipeTypeBookmark = recipeBookmark.isPresent();
         boolean isCraftingPattern = selectedRecipe instanceof CraftingRecipe;
-        List<ItemStack> selectedIngredients = selectIngredientsWithJeiPriority(selectedRecipe);
+        List<ItemStack> selectedIngredients;
+        if (recipeBookmark.isPresent() && !recipeBookmark.get().recipeInputs().isEmpty()) {
+            selectedIngredients = new ArrayList<>(recipeBookmark.get().recipeInputs());
+        } else {
+            selectedIngredients = selectIngredientsWithJeiPriority(selectedRecipe);
+        }
 
         if (fromRecipeTypeBookmark && !isMatrixRecipeType(selectedRecipe)) {
             String searchKey = RecipeTypeNameConfig.mapRecipeTypeToSearchKey(selectedRecipe);
@@ -125,7 +146,7 @@ public class CtrlQPatternKeyHandler {
 
     @SubscribeEvent
     public static void onScreenKeyReleased(ScreenEvent.KeyReleased.Pre event) {
-        if (event.getKeyCode() == GLFW.GLFW_KEY_Q) {
+        if (ModKeybindings.CREATE_PATTERN_KEY.matches(event.getKeyCode(), event.getScanCode())) {
             ctrlQKeyHeld = false;
         }
     }

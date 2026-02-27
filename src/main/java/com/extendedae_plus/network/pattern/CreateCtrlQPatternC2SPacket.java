@@ -33,8 +33,14 @@ import net.minecraftforge.network.NetworkEvent;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.lang.reflect.Array;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -91,12 +97,11 @@ public class CreateCtrlQPatternC2SPacket {
             }
 
             RecipeManager recipeManager = player.level().getRecipeManager();
-            var recipeOpt = recipeManager.byKey(msg.recipeId);
-            if (recipeOpt.isEmpty()) {
+            Recipe<?> recipe = findRecipeById(recipeManager, msg.recipeId);
+            if (recipe == null) {
                 player.displayClientMessage(Component.translatable("message.extendedae_plus.recipe_not_found"), false);
                 return;
             }
-            Recipe<?> recipe = recipeOpt.get();
 
             if (isDuplicateRequest(player, msg)) {
                 return;
@@ -289,10 +294,15 @@ public class CreateCtrlQPatternC2SPacket {
 
     private static ItemStack createPattern(Recipe<?> recipe, boolean isCrafting, List<ItemStack> selectedIngredients, ServerPlayer player) {
         try {
+            List<ItemStack> encodeInputs = ensureEncodingInputs(recipe, selectedIngredients);
+            if (encodeInputs.isEmpty()) {
+                return ItemStack.EMPTY;
+            }
+
             if (isCrafting && recipe instanceof CraftingRecipe) {
                 ItemStack[] inputs = new ItemStack[9];
                 for (int i = 0; i < 9; i++) {
-                    inputs[i] = i < selectedIngredients.size() ? selectedIngredients.get(i).copy() : ItemStack.EMPTY;
+                    inputs[i] = i < encodeInputs.size() ? encodeInputs.get(i).copy() : ItemStack.EMPTY;
                 }
                 ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
                 ItemStack encoded = invokePatternEncode(
@@ -310,7 +320,7 @@ public class CreateCtrlQPatternC2SPacket {
             }
 
             if (recipe instanceof StonecutterRecipe) {
-                ItemStack input = selectedIngredients.isEmpty() ? ItemStack.EMPTY : selectedIngredients.get(0);
+                ItemStack input = encodeInputs.isEmpty() ? ItemStack.EMPTY : encodeInputs.get(0);
                 ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
                 if (input.isEmpty() || output.isEmpty()) {
                     return ItemStack.EMPTY;
@@ -329,9 +339,9 @@ public class CreateCtrlQPatternC2SPacket {
             }
 
             if (recipe instanceof SmithingRecipe) {
-                ItemStack template = selectedIngredients.size() > 0 ? selectedIngredients.get(0) : ItemStack.EMPTY;
-                ItemStack base = selectedIngredients.size() > 1 ? selectedIngredients.get(1) : ItemStack.EMPTY;
-                ItemStack addition = selectedIngredients.size() > 2 ? selectedIngredients.get(2) : ItemStack.EMPTY;
+                ItemStack template = encodeInputs.size() > 0 ? encodeInputs.get(0) : ItemStack.EMPTY;
+                ItemStack base = encodeInputs.size() > 1 ? encodeInputs.get(1) : ItemStack.EMPTY;
+                ItemStack addition = encodeInputs.size() > 2 ? encodeInputs.get(2) : ItemStack.EMPTY;
                 ItemStack output = recipe.getResultItem(player.level().registryAccess()).copy();
                 if (template.isEmpty() || base.isEmpty() || addition.isEmpty() || output.isEmpty()) {
                     return ItemStack.EMPTY;
@@ -353,7 +363,7 @@ public class CreateCtrlQPatternC2SPacket {
 
             List<GenericStack> inputs = new ArrayList<>();
             List<GenericStack> outputs = new ArrayList<>();
-            for (ItemStack item : selectedIngredients) {
+            for (ItemStack item : encodeInputs) {
                 if (!item.isEmpty()) {
                     inputs.add(new GenericStack(AEItemKey.of(item), item.getCount()));
                 }
@@ -373,6 +383,391 @@ public class CreateCtrlQPatternC2SPacket {
         } catch (Exception e) {
             return ItemStack.EMPTY;
         }
+    }
+
+    private static List<ItemStack> ensureEncodingInputs(Recipe<?> recipe, List<ItemStack> selectedIngredients) {
+        List<ItemStack> normalized = new ArrayList<>();
+        if (selectedIngredients != null) {
+            for (ItemStack stack : selectedIngredients) {
+                if (stack != null && !stack.isEmpty()) {
+                    normalized.add(stack.copy());
+                }
+            }
+        }
+        List<ItemStack> reflected = reflectInputsFromRecipe(recipe);
+        if (!normalized.isEmpty()) {
+            List<ItemStack> adjusted = applySelectedCountsBySlot(normalized, reflected);
+            return applySelectedCounts(adjusted, reflected);
+        }
+        List<ItemStack> vanilla = extractVanillaIngredientInputs(recipe);
+        if (!vanilla.isEmpty()) {
+            return vanilla;
+        }
+        return reflected;
+    }
+
+    private static List<ItemStack> extractVanillaIngredientInputs(Recipe<?> recipe) {
+        List<ItemStack> out = new ArrayList<>();
+        if (recipe == null) {
+            return out;
+        }
+        try {
+            for (net.minecraft.world.item.crafting.Ingredient ingredient : recipe.getIngredients()) {
+                if (ingredient.isEmpty()) {
+                    continue;
+                }
+                ItemStack[] items = ingredient.getItems();
+                if (items.length > 0 && !items[0].isEmpty()) {
+                    out.add(items[0].copy());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    private static List<ItemStack> reflectInputsFromRecipe(Recipe<?> recipe) {
+        List<ItemStack> out = new ArrayList<>();
+        if (recipe == null) {
+            return out;
+        }
+
+        List<Object> candidates = new ArrayList<>();
+        String[] knownInputAccessors = {
+            "getItemInput",
+            "getMainInput",
+            "getBaseInput",
+            "getTemplateInput",
+            "getAdditionInput",
+            "getTemplate",
+            "getAddition",
+            "getLeftInput",
+            "getRightInput",
+            "getInput",
+            "getInputs",
+            "getItemInputs"
+        };
+        for (String accessor : knownInputAccessors) {
+            Object value = invokeNoArg(recipe, accessor);
+            if (value != null) {
+                candidates.add(value);
+            }
+        }
+        if (!candidates.isEmpty()) {
+            Set<Object> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+            for (Object candidate : candidates) {
+                collectItemStacks(candidate, out, visited, 0);
+            }
+            if (!out.isEmpty()) {
+                return out;
+            }
+        }
+
+        for (Method method : recipe.getClass().getMethods()) {
+            if (method.getParameterCount() != 0) {
+                continue;
+            }
+            String methodName = method.getName().toLowerCase(Locale.ROOT);
+            if (!isLikelyInputMethod(methodName)) {
+                continue;
+            }
+            try {
+                Object value = method.invoke(recipe);
+                if (value != null) {
+                    candidates.add(value);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        Set<Object> visited = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Object candidate : candidates) {
+            collectItemStacks(candidate, out, visited, 0);
+        }
+        return out;
+    }
+
+    private static void collectItemStacks(Object source, List<ItemStack> out, Set<Object> visited, int depth) {
+        if (source == null || depth > 6) {
+            return;
+        }
+        if (source instanceof ItemStack stack) {
+            if (!stack.isEmpty()) {
+                addUniqueStack(out, stack);
+            }
+            return;
+        }
+        if (source instanceof net.minecraft.world.item.crafting.Ingredient ingredient) {
+            ItemStack[] items = ingredient.getItems();
+            if (items.length > 0 && !items[0].isEmpty()) {
+                addUniqueStack(out, items[0]);
+            }
+            return;
+        }
+        if (source instanceof Optional<?> optional) {
+            optional.ifPresent(value -> collectItemStacks(value, out, visited, depth + 1));
+            return;
+        }
+        ItemStack countedStack = extractStackWithAmount(source);
+        if (!countedStack.isEmpty()) {
+            addUniqueStack(out, countedStack);
+            return;
+        }
+        if (source instanceof Collection<?> collection) {
+            boolean allItemStacks = true;
+            for (Object value : collection) {
+                if (value != null && !(value instanceof ItemStack)) {
+                    allItemStacks = false;
+                    break;
+                }
+            }
+            if (allItemStacks) {
+                for (Object value : collection) {
+                    if (value instanceof ItemStack stack && !stack.isEmpty()) {
+                        addUniqueStack(out, stack);
+                        return;
+                    }
+                }
+            }
+            for (Object value : collection) {
+                collectItemStacks(value, out, visited, depth + 1);
+            }
+            return;
+        }
+        if (source.getClass().isArray()) {
+            int len = Array.getLength(source);
+            boolean allItemStacks = true;
+            for (int i = 0; i < len; i++) {
+                Object value = Array.get(source, i);
+                if (value != null && !(value instanceof ItemStack)) {
+                    allItemStacks = false;
+                    break;
+                }
+            }
+            if (allItemStacks) {
+                for (int i = 0; i < len; i++) {
+                    Object value = Array.get(source, i);
+                    if (value instanceof ItemStack stack && !stack.isEmpty()) {
+                        addUniqueStack(out, stack);
+                        return;
+                    }
+                }
+            }
+            for (int i = 0; i < len; i++) {
+                collectItemStacks(Array.get(source, i), out, visited, depth + 1);
+            }
+            return;
+        }
+
+        if (!visited.add(source)) {
+            return;
+        }
+
+        String[] preferredMethods = {
+            "getRepresentations",
+            "getMatchingStacks",
+            "getItems",
+            "getIngredient",
+            "getInput",
+            "getInputs",
+            "getItemInput",
+            "getItemInputs",
+            "getItemStack"
+        };
+        for (String methodName : preferredMethods) {
+            Object value = invokeNoArg(source, methodName);
+            if (value != null) {
+                collectItemStacks(value, out, visited, depth + 1);
+            }
+        }
+    }
+
+    private static Object invokeNoArg(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            if (method.getParameterCount() == 0) {
+                return method.invoke(target);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static boolean isLikelyInputMethod(String methodName) {
+        if (methodName == null || methodName.isBlank()) {
+            return false;
+        }
+        if (!(methodName.contains("input") || methodName.contains("ingredient"))) {
+            return false;
+        }
+        return !(methodName.contains("output")
+            || methodName.contains("result")
+            || methodName.contains("product")
+            || methodName.contains("chemical")
+            || methodName.contains("fluid")
+            || methodName.contains("gas")
+            || methodName.contains("display")
+            || methodName.equals("getresultitem"));
+    }
+
+    private static void addUniqueStack(List<ItemStack> out, ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return;
+        }
+        for (ItemStack existing : out) {
+            if (ItemStack.isSameItemSameTags(existing, stack)) {
+                if (stack.getCount() > existing.getCount()) {
+                    existing.setCount(stack.getCount());
+                }
+                return;
+            }
+        }
+        out.add(stack.copy());
+    }
+
+    private static List<ItemStack> applySelectedCountsBySlot(List<ItemStack> selected, List<ItemStack> candidate) {
+        if (selected == null || selected.isEmpty()) {
+            return selected == null ? new ArrayList<>() : selected;
+        }
+        List<ItemStack> adjusted = new ArrayList<>(selected.size());
+        for (ItemStack stack : selected) {
+            adjusted.add(stack == null ? ItemStack.EMPTY : stack.copy());
+        }
+        if (candidate == null || candidate.isEmpty() || candidate.size() != adjusted.size()) {
+            return adjusted;
+        }
+        for (int i = 0; i < adjusted.size(); i++) {
+            ItemStack out = adjusted.get(i);
+            ItemStack source = candidate.get(i);
+            if (out.isEmpty() || source == null || source.isEmpty()) {
+                continue;
+            }
+            if (source.getCount() > out.getCount()) {
+                out.setCount(source.getCount());
+            }
+        }
+        return adjusted;
+    }
+
+    private static List<ItemStack> applySelectedCounts(List<ItemStack> selected, List<ItemStack> candidate) {
+        if (selected == null || selected.isEmpty()) {
+            return selected == null ? new ArrayList<>() : selected;
+        }
+        if (candidate == null || candidate.isEmpty()) {
+            return selected;
+        }
+        List<ItemStack> adjusted = new ArrayList<>(selected.size());
+        for (ItemStack base : selected) {
+            if (base == null || base.isEmpty()) {
+                continue;
+            }
+            ItemStack out = base.copy();
+            int maxCount = out.getCount();
+            for (ItemStack source : candidate) {
+                if (source == null || source.isEmpty()) {
+                    continue;
+                }
+                if (ItemStack.isSameItemSameTags(out, source) && source.getCount() > maxCount) {
+                    maxCount = source.getCount();
+                }
+            }
+            out.setCount(maxCount);
+            adjusted.add(out);
+        }
+        return adjusted;
+    }
+
+    private static ItemStack extractStackWithAmount(Object source) {
+        if (source == null) {
+            return ItemStack.EMPTY;
+        }
+        if (source instanceof Collection<?> || source.getClass().isArray()) {
+            return ItemStack.EMPTY;
+        }
+        int amount = extractInputAmount(source);
+        if (amount <= 1) {
+            return ItemStack.EMPTY;
+        }
+        String[] ingredientAccessors = {
+            "getIngredient",
+            "getInput",
+            "getItemInput",
+            "getRepresentations",
+            "getMatchingStacks",
+            "getItems",
+            "getItemStack"
+        };
+        for (String accessor : ingredientAccessors) {
+            Object value = invokeNoArg(source, accessor);
+            ItemStack stack = extractFirstStack(value);
+            if (!stack.isEmpty()) {
+                ItemStack withAmount = stack.copy();
+                withAmount.setCount(Math.max(withAmount.getCount(), amount));
+                return withAmount;
+            }
+        }
+        return ItemStack.EMPTY;
+    }
+
+    private static int extractInputAmount(Object source) {
+        if (source == null) {
+            return 1;
+        }
+        String[] amountMethods = {
+            "getAmount",
+            "getInputAmount",
+            "getNeededAmount",
+            "getRequiredAmount",
+            "amount",
+            "count",
+            "getCount"
+        };
+        for (String methodName : amountMethods) {
+            Object value = invokeNoArg(source, methodName);
+            if (value instanceof Number n) {
+                int amount = n.intValue();
+                if (amount > 0 && amount < 100000) {
+                    return amount;
+                }
+            }
+        }
+        return 1;
+    }
+
+    private static ItemStack extractFirstStack(Object value) {
+        if (value == null) {
+            return ItemStack.EMPTY;
+        }
+        if (value instanceof ItemStack stack) {
+            return stack.isEmpty() ? ItemStack.EMPTY : stack;
+        }
+        if (value instanceof net.minecraft.world.item.crafting.Ingredient ingredient) {
+            ItemStack[] items = ingredient.getItems();
+            return items.length == 0 ? ItemStack.EMPTY : items[0];
+        }
+        if (value instanceof Optional<?> optional) {
+            return extractFirstStack(optional.orElse(null));
+        }
+        if (value instanceof Collection<?> collection) {
+            for (Object element : collection) {
+                ItemStack stack = extractFirstStack(element);
+                if (!stack.isEmpty()) {
+                    return stack;
+                }
+            }
+            return ItemStack.EMPTY;
+        }
+        if (value.getClass().isArray()) {
+            int len = Array.getLength(value);
+            for (int i = 0; i < len; i++) {
+                ItemStack stack = extractFirstStack(Array.get(value, i));
+                if (!stack.isEmpty()) {
+                    return stack;
+                }
+            }
+            return ItemStack.EMPTY;
+        }
+        return ItemStack.EMPTY;
     }
 
     private static ItemStack invokePatternEncode(String methodName, Recipe<?> recipe, Object... args) {
@@ -421,6 +816,28 @@ public class CreateCtrlQPatternC2SPacket {
                 if (ResourceLocation.class.isAssignableFrom(params[0]) && params[1].isInstance(recipe)) {
                     ctor.setAccessible(true);
                     return ctor.newInstance(recipe.getId(), recipe);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static Recipe<?> findRecipeById(RecipeManager recipeManager, ResourceLocation recipeId) {
+        if (recipeManager == null || recipeId == null) {
+            return null;
+        }
+        try {
+            var recipeOpt = recipeManager.byKey(recipeId);
+            if (recipeOpt.isPresent()) {
+                return recipeOpt.get();
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            for (Recipe<?> recipe : recipeManager.getRecipes()) {
+                if (recipeId.equals(recipe.getId())) {
+                    return recipe;
                 }
             }
         } catch (Throwable ignored) {
