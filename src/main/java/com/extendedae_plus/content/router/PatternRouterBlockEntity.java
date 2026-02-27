@@ -9,6 +9,7 @@ import appeng.core.settings.TickRates;
 import appeng.util.inv.AppEngInternalInventory;
 import appeng.util.inv.InternalInventoryHost;
 import com.extendedae_plus.init.ModBlockEntities;
+import com.extendedae_plus.util.uploadPattern.PatternRouterUploadUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -44,7 +45,6 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
     // 核心组件
     private final IManagedGridNode managedNode;
     private final AppEngInternalInventory patternStorage; // 存储待插入的样板（9个槽位）
-    private PatternInsertionManager insertionManager;
     
     // 新增：用于检测样板数量变化
     private int[] lastPatternCounts = new int[9];
@@ -164,7 +164,6 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
         if (this.level != null && !this.level.isClientSide) {
             GridHelper.onFirstTick(this, be -> {
                 be.managedNode.create(be.getLevel(), be.getBlockPos());
-                be.insertionManager = new PatternInsertionManager();
             });
         }
     }
@@ -222,12 +221,7 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
      * 尝试插入所有样板
      */
     private boolean tryInsertPatterns() {
-        if (insertionManager == null || !managedNode.isActive()) {
-            return false;
-        }
-
-        var grid = managedNode.getGrid();
-        if (grid == null) {
+        if (!managedNode.isActive()) {
             return false;
         }
 
@@ -241,8 +235,8 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
                 continue;
             }
 
-            // 尝试插入
-            boolean success = insertionManager.insertPattern(patternStack, grid, null, worldPosition);
+            // 尝试使用PatternRouterUploadUtil上传样板
+            boolean success = PatternRouterUploadUtil.uploadPatternToMatchedProviders(this, patternStack);
 
             if (success) {
                 // 插入成功，从槽位移除

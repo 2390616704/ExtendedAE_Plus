@@ -13,6 +13,7 @@ import appeng.items.tools.powered.WirelessTerminalItem;
 import appeng.me.helpers.PlayerSource;
 import com.extendedae_plus.util.uploadPattern.MatrixUploadUtil;
 import com.extendedae_plus.util.uploadPattern.ProviderUploadUtil;
+import com.extendedae_plus.util.uploadPattern.RecipeTypeNameConfig;
 import com.extendedae_plus.util.wireless.WirelessTerminalLocator;
 import de.mari_023.ae2wtlib.terminal.WTMenuHost;
 import de.mari_023.ae2wtlib.wut.WTDefinition;
@@ -315,6 +316,8 @@ public class CreateCtrlQPatternC2SPacket {
                 );
                 if (!encoded.isEmpty()) {
                     encoded.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+                    // 添加配方类型后缀到样板名称
+                    addRecipeTypeSuffixToPattern(encoded, recipe, output);
                 }
                 return encoded;
             }
@@ -334,6 +337,8 @@ public class CreateCtrlQPatternC2SPacket {
                 );
                 if (!encoded.isEmpty()) {
                     encoded.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+                    // 添加配方类型后缀到样板名称
+                    addRecipeTypeSuffixToPattern(encoded, recipe, output);
                 }
                 return encoded;
             }
@@ -357,6 +362,8 @@ public class CreateCtrlQPatternC2SPacket {
                 );
                 if (!encoded.isEmpty()) {
                     encoded.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+                    // 添加配方类型后缀到样板名称
+                    addRecipeTypeSuffixToPattern(encoded, recipe, output);
                 }
                 return encoded;
             }
@@ -379,6 +386,8 @@ public class CreateCtrlQPatternC2SPacket {
                 outputs.toArray(new GenericStack[0])
             );
             encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+            // 添加配方类型后缀到样板名称
+            addRecipeTypeSuffixToPattern(encodedPattern, recipe, result);
             return encodedPattern;
         } catch (Exception e) {
             return ItemStack.EMPTY;
@@ -821,6 +830,37 @@ public class CreateCtrlQPatternC2SPacket {
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    /**
+     * 添加配方类型后缀到样板名称
+     * 格式: "物品名_配方类型后缀"
+     */
+    private static void addRecipeTypeSuffixToPattern(ItemStack pattern, Recipe<?> recipe, ItemStack outputItem) {
+        if (pattern.isEmpty() || recipe == null || outputItem.isEmpty()) {
+            return;
+        }
+        
+        try {
+            // 获取配方类型搜索键
+            String searchKey = RecipeTypeNameConfig.mapRecipeTypeToSearchKey(recipe);
+            if (searchKey == null || searchKey.isBlank()) {
+                return;
+            }
+            
+            // 获取输出物品的名称
+            String itemName = outputItem.getHoverName().getString();
+            if (itemName == null || itemName.isBlank()) {
+                itemName = outputItem.getDisplayName().getString();
+            }
+            
+            // 创建新的样板名称: "物品名_配方类型后缀"
+            String patternName = itemName + "_" + searchKey;
+            pattern.setHoverName(net.minecraft.network.chat.Component.literal(patternName));
+            
+        } catch (Exception e) {
+            // 静默失败，不影响样板创建
+        }
     }
 
     private static Recipe<?> findRecipeById(RecipeManager recipeManager, ResourceLocation recipeId) {
