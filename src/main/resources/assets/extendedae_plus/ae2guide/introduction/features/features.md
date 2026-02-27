@@ -129,8 +129,17 @@ A multiplication control button is added in the pattern provider GUI, allowing p
 
 ### 2. JEI & Terminal Synchronization
 
-- **F Key:** Syncs the JEI item name to AE2 search bar and ExtendedAE pattern management interface.
+- **Search Sync Key (default F):** Syncs the JEI item name to AE2 search bar and ExtendedAE pattern management interface; this key is configurable in Controls.
 - **Pattern Priority Matching:** Prioritize JEI bookmarks when writing patterns.
+
+### 3. Ctrl+Q Recipe Bookmark Pattern Creation
+
+- **Crafting / Stonecutting / Smithing patterns:** The mod directly attempts to upload the pattern to the Assembly Matrix through the player-accessible AE network. This flow does not require opening the Pattern Encoding Terminal UI.
+- **Processing patterns:** The mod opens the provider-selection UI directly, and pre-fills the search keyword using the existing recipe-type mapping table.
+- **No extra inventory pattern for special bookmarks:** This special flow does not place the created pattern into player inventory, even when upload/opening the selection UI fails.
+- **Normal bookmark behavior:** Normal JEI bookmarks directly create a pattern into player inventory; recipes are auto-searched, and crafting patterns are preferred during selection.
+
+<br/>
 
 ---
 

@@ -231,9 +231,10 @@
 
   "message.extendedae_plus.hover_item_first": "Please hover over an item first",
   "message.extendedae_plus.no_recipes_found": "No recipes found for this item",
-  "message.extendedae_plus.no_blank_pattern": "No blank pattern in inventory",
+  "message.extendedae_plus.no_blank_pattern": "No available blank pattern found",
   "message.extendedae_plus.recipe_not_found": "Recipe not found",
   "message.extendedae_plus.pattern_creation_failed": "Pattern creation failed",
+  "message.extendedae_plus.no_provider_found": "No available pattern provider found in the current network",
   "message.extendedae_plus.pattern_created": "Created pattern: %s",
 
   "block.extendedae_plus.pattern_router": "Pattern Router",
@@ -249,5 +250,6 @@
   "extendedae_plus.pattern_suffix.crafting": "Molecular Assembler",
 
   "key.extendedae_plus.create_pattern": "Create Pattern from JEI",
+  "key.extendedae_plus.sync_search": "Sync JEI Name to Search",
   "key.categories.extendedae_plus": "ExtendedAE Plus"
 }

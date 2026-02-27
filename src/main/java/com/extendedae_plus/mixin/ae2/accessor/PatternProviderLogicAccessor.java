@@ -9,14 +9,14 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 
 import java.util.List;
 
-@Mixin(value = PatternProviderLogic.class, remap = false)
+@Mixin(PatternProviderLogic.class)
 public interface PatternProviderLogicAccessor {
-    @Accessor("host")
+    @Accessor(value = "host", remap = false)
     PatternProviderLogicHost eap$host();
 
-    @Accessor("mainNode")
+    @Accessor(value = "mainNode", remap = false)
     IManagedGridNode eap$mainNode();
 
-    @Accessor("patterns")
+    @Accessor(value = "patterns" , remap = false)
     List<IPatternDetails> eap$patterns();
 }

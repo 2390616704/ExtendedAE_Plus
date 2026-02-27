@@ -120,3 +120,4 @@ libs/*
 /src/generated/resources/.cache
 othermods
 /doc/
+/libs/

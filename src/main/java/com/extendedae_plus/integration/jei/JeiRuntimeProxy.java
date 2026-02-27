@@ -137,6 +137,19 @@ public final class JeiRuntimeProxy {
         }
     }
 
+    public static Optional<JeiRecipeBookmarkContext> getRecipeBookmarkContextUnderMouse() {
+        try {
+            Class<?> bridge = Class.forName("com.extendedae_plus.integration.jei.JeiBookmarkBridge");
+            var m = bridge.getMethod("getRecipeBookmarkContextUnderMouse");
+            Object result = m.invoke(null);
+            if (result instanceof JeiRecipeBookmarkContext context) {
+                return Optional.of(context);
+            }
+        } catch (Throwable ignored) {
+        }
+        return Optional.empty();
+    }
+
     public static void addBookmark(ItemStack stack) {
         try {
             Class<?> bridge = Class.forName("com.extendedae_plus.integration.jei.JeiBookmarkBridge");

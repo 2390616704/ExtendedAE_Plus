@@ -9,7 +9,11 @@ import mezz.jei.api.runtime.IBookmarkOverlay;
 import mezz.jei.api.runtime.IJeiRuntime;
 import mezz.jei.gui.bookmarks.BookmarkList;
 import mezz.jei.gui.bookmarks.IngredientBookmark;
+import mezz.jei.gui.bookmarks.RecipeBookmark;
+import mezz.jei.gui.input.MouseUtil;
+import mezz.jei.gui.overlay.bookmarks.BookmarkOverlay;
 import mezz.jei.gui.overlay.elements.IElement;
+import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fml.ModList;
@@ -18,6 +22,7 @@ import org.spongepowered.asm.mixin.Pseudo;
 import javax.annotation.Nullable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -53,6 +58,156 @@ public final class JeiBookmarkBridge {
             return bookmarkList.getElements().stream().map(IElement::getTypedIngredient).toList();
         }
         return Collections.emptyList();
+    }
+
+    public static @Nullable JeiRecipeBookmarkContext getRecipeBookmarkContextUnderMouse() {
+        IJeiRuntime rt = getRuntime();
+        if (rt == null) return null;
+
+        IBookmarkOverlay overlay = rt.getBookmarkOverlay();
+        if (!(overlay instanceof BookmarkOverlay bookmarkOverlay)) {
+            return null;
+        }
+
+        // BookmarkOverlay expects GUI-scaled coordinates, not raw window pixels.
+        double mouseX = MouseUtil.getX();
+        double mouseY = MouseUtil.getY();
+        var hovered = bookmarkOverlay.getIngredientUnderMouse(mouseX, mouseY).findFirst().orElse(null);
+        if (hovered == null) {
+            return null;
+        }
+
+        var bookmark = hovered.getElement().getBookmark().orElse(null);
+        if (!(bookmark instanceof RecipeBookmark<?, ?> recipeBookmark)) {
+            return null;
+        }
+
+        var recipeType = recipeBookmark.getRecipeCategory().getRecipeType();
+        var recipeId = getRecipeId(recipeBookmark);
+        if (recipeType == null || recipeType.getUid() == null) {
+            return null;
+        }
+
+        ItemStack outputPreview = extractItemStackFromTypedIngredient(hovered.getTypedIngredient());
+        if (outputPreview.isEmpty()) {
+            Object recipe = recipeBookmark.getRecipe();
+            if (recipe instanceof net.minecraft.world.item.crafting.Recipe<?> r) {
+                try {
+                    Minecraft mc = Minecraft.getInstance();
+                    if (mc != null && mc.level != null) {
+                        outputPreview = r.getResultItem(mc.level.registryAccess()).copy();
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        List<ItemStack> recipeInputs = extractRecipeInputs(rt, recipeBookmark);
+        return new JeiRecipeBookmarkContext(recipeId, recipeType.getUid(), outputPreview, recipeInputs);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static @Nullable net.minecraft.resources.ResourceLocation getRecipeId(RecipeBookmark<?, ?> recipeBookmark) {
+        try {
+            var category = (mezz.jei.api.recipe.category.IRecipeCategory) recipeBookmark.getRecipeCategory();
+            return (net.minecraft.resources.ResourceLocation) category.getRegistryName(recipeBookmark.getRecipe());
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static List<ItemStack> extractRecipeInputs(IJeiRuntime runtime, RecipeBookmark<?, ?> recipeBookmark) {
+        List<ItemStack> inputs = new ArrayList<>();
+        if (runtime == null || recipeBookmark == null) {
+            return inputs;
+        }
+        try {
+            Object recipeManager = runtime.getRecipeManager();
+            Object recipeCategory = recipeBookmark.getRecipeCategory();
+            Object recipe = recipeBookmark.getRecipe();
+            Object supplier = invokeMethod2(recipeManager, "getRecipeIngredients", recipeCategory, recipe);
+            if (supplier == null) {
+                return inputs;
+            }
+
+            Object roleInput = Class.forName("mezz.jei.api.recipe.RecipeIngredientRole")
+                .getField("INPUT")
+                .get(null);
+            Object ingredientList = invokeMethod1(supplier, "getIngredients", roleInput);
+            if (!(ingredientList instanceof List<?> list)) {
+                return inputs;
+            }
+
+            for (Object typed : list) {
+                ItemStack stack = extractItemStackFromTypedIngredient(typed);
+                if (!stack.isEmpty()) {
+                    inputs.add(stack.copy());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return inputs;
+    }
+
+    private static Object invokeMethod1(Object target, String methodName, Object arg) {
+        if (target == null || arg == null) {
+            return null;
+        }
+        for (Method method : target.getClass().getMethods()) {
+            if (!method.getName().equals(methodName) || method.getParameterCount() != 1) {
+                continue;
+            }
+            Class<?> param = method.getParameterTypes()[0];
+            if (!param.isInstance(arg) && !param.isAssignableFrom(arg.getClass())) {
+                continue;
+            }
+            try {
+                return method.invoke(target, arg);
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static Object invokeMethod2(Object target, String methodName, Object arg1, Object arg2) {
+        if (target == null || arg1 == null || arg2 == null) {
+            return null;
+        }
+        for (Method method : target.getClass().getMethods()) {
+            if (!method.getName().equals(methodName) || method.getParameterCount() != 2) {
+                continue;
+            }
+            Class<?>[] params = method.getParameterTypes();
+            if ((!params[0].isInstance(arg1) && !params[0].isAssignableFrom(arg1.getClass()))
+                || (!params[1].isInstance(arg2) && !params[1].isAssignableFrom(arg2.getClass()))) {
+                continue;
+            }
+            try {
+                return method.invoke(target, arg1, arg2);
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static ItemStack extractItemStackFromTypedIngredient(Object typed) {
+        if (typed == null) {
+            return ItemStack.EMPTY;
+        }
+        if (typed instanceof ITypedIngredient<?> ingredient) {
+            Optional<ItemStack> stack = ingredient.getIngredient(VanillaTypes.ITEM_STACK);
+            if (stack.isPresent()) {
+                return stack.get();
+            }
+        }
+        try {
+            Object ingredient = typed.getClass().getMethod("getIngredient").invoke(typed);
+            if (ingredient instanceof ItemStack stack) {
+                return stack;
+            }
+        } catch (Throwable ignored) {
+        }
+        return ItemStack.EMPTY;
     }
 
     public static void addBookmark(ItemStack stack) {

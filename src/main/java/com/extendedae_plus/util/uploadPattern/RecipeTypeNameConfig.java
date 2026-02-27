@@ -244,6 +244,16 @@ public final class RecipeTypeNameConfig {
         if (recipe == null) return null;
         RecipeType<?> type = recipe.getType();
         ResourceLocation key = BuiltInRegistries.RECIPE_TYPE.getKey(type);
+        return mapRecipeTypeIdToSearchKey(key);
+    }
+
+    /**
+     * 按配方类型ID映射到搜索关键字，优先使用别名或自定义名称。
+     *
+     * @param key 配方类型ID
+     * @return 搜索关键字（自定义名称、别名或类型路径），或 null 如果无效
+     */
+    public static String mapRecipeTypeIdToSearchKey(ResourceLocation key) {
         if (key == null) return null;
         String path = key.getPath().toLowerCase();
         // 优先查别名，再查完整 ID，最后用路径
