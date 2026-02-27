@@ -129,7 +129,7 @@ A multiplication control button is added in the pattern provider GUI, allowing p
 
 ### 2. JEI & Terminal Synchronization
 
-- **F Key:** Syncs the JEI item name to AE2 search bar and ExtendedAE pattern management interface.
+- **Search Sync Key (default F):** Syncs the JEI item name to AE2 search bar and ExtendedAE pattern management interface; this key is configurable in Controls.
 - **Pattern Priority Matching:** Prioritize JEI bookmarks when writing patterns.
 
 ### 3. Ctrl+Q Recipe Bookmark Pattern Creation

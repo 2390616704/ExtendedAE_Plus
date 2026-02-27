@@ -101,7 +101,9 @@ public final class InputEvents {
             return;
         }
         // 注意：不要在 try/catch 之外直接访问 JEI 运行时，避免类加载崩溃
-        if (event.getKeyCode() != GLFW.GLFW_KEY_F) return;
+        if (!ModKeybindings.SYNC_SEARCH_KEY.matches(event.getKeyCode(), event.getScanCode())) {
+            return;
+        }
 
         // 仅当鼠标确实悬停在 JEI 配料上时触发
         try {

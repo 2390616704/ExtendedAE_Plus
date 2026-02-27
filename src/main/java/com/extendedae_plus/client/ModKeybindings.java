@@ -25,11 +25,23 @@ public final class ModKeybindings {
     );
 
     /**
+     * JEI 名称同步到终端搜索栏（默认 F）
+     */
+    public static final KeyMapping SYNC_SEARCH_KEY = new KeyMapping(
+        "key.extendedae_plus.sync_search",
+        KeyConflictContext.GUI,
+        InputConstants.Type.KEYSYM,
+        GLFW.GLFW_KEY_F,
+        "key.categories.extendedae_plus"
+    );
+
+    /**
      * 注册所有快捷键
      *
      * @param event Forge快捷键注册事件
      */
     public static void register(net.minecraftforge.client.event.RegisterKeyMappingsEvent event) {
         event.register(CREATE_PATTERN_KEY);
+        event.register(SYNC_SEARCH_KEY);
     }
 }
