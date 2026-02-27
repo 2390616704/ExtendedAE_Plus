@@ -156,10 +156,23 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// 定义游戏 mods 文件夹路径
+def minecraftModsDir = "D:/game/minecraft2/.minecraft/versions/1.20.1-Forge_47.4.16/mods"
+
 // 将 LICENSE 打包进发布的 jar
 tasks.named('jar', Jar).configure {
     from('.') {
         include 'LICENSE'
+    }
+}
+
+// 创建复制mod到游戏文件夹的任务
+task copyModToGame(type: Copy) {
+    dependsOn jar
+    from jar.archiveFile
+    into minecraftModsDir
+    doLast {
+        println "✓ Mod 已复制到: ${minecraftModsDir}"
     }
 }
 

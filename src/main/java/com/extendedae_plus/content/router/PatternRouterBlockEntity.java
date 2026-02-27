@@ -6,37 +6,34 @@ import appeng.api.networking.ticking.TickRateModulation;
 import appeng.api.networking.ticking.TickingRequest;
 import appeng.core.definitions.AEItems;
 import appeng.core.settings.TickRates;
-import appeng.menu.locator.MenuLocators;
 import appeng.util.inv.AppEngInternalInventory;
 import appeng.util.inv.InternalInventoryHost;
 import com.extendedae_plus.init.ModBlockEntities;
-import com.extendedae_plus.menu.PatternRouterMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
-import net.minecraft.world.MenuProvider;
-import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraftforge.common.capabilities.Capability;
+import net.minecraftforge.common.capabilities.ForgeCapabilities;
+import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.items.IItemHandler;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 样板输入总线方块实体
+ * 样板路由器方块实体
  *
- * 参考 ME接口 设计：
- * 1. 玩家将编码样板放入存储槽
- * 2. 定期 tick 检查每个样板
+ * 功能：
+ * 1. 通过漏斗输入编码样板
+ * 2. 定期 tick 检查样板
  * 3. 根据样板名称后缀找到匹配的供应器
- * 4. 将样板插入供应器（使用正确的 API）
- * 5. 如果没有匹配的供应器，保留在槽中并提示玩家
+ * 4. 将样板插入供应器
+ * 5. 如果没有匹配的供应器，保留在存储中
  */
-public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGridNodeHost, InternalInventoryHost, MenuProvider {
+public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGridNodeHost, InternalInventoryHost {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(PatternRouterBlockEntity.class);
 
@@ -45,11 +42,98 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
     private final AppEngInternalInventory patternStorage; // 存储待插入的样板（9个槽位）
     private PatternInsertionManager insertionManager;
 
+    // ItemHandler 包装器 - 允许漏斗输入
+    private final LazyOptional<IItemHandler> itemHandlerCap;
+
+    private class PatternRouterItemHandler implements IItemHandler {
+        @Override
+        public int getSlots() {
+            return patternStorage.size();
+        }
+
+        @Override
+        public ItemStack getStackInSlot(int slot) {
+            return patternStorage.getStackInSlot(slot);
+        }
+
+        @Override
+        public ItemStack insertItem(int slot, ItemStack stack, boolean simulate) {
+            if (stack.isEmpty()) {
+                return ItemStack.EMPTY;
+            }
+
+            // 只接受编码样板
+            if (!isEncodedPattern(stack)) {
+                return stack;
+            }
+
+            ItemStack copy = stack.copy();
+            copy.setCount(1);
+
+            ItemStack existing = patternStorage.getStackInSlot(slot);
+            if (existing.isEmpty()) {
+                if (!simulate) {
+                    patternStorage.setItemDirect(slot, copy);
+                    setChanged();
+                    // 唤醒 ticker 处理新样板
+                    if (managedNode.isActive()) {
+                        managedNode.ifPresent((grid, node) -> {
+                            grid.getTickManager().wakeDevice(node);
+                        });
+                    }
+                }
+                // 返回多余的物品
+                ItemStack remaining = stack.copy();
+                remaining.shrink(1);
+                return remaining.isEmpty() ? ItemStack.EMPTY : remaining;
+            }
+
+            return stack; // 槽位已满，返回原物品
+        }
+
+        @Override
+        public ItemStack extractItem(int slot, int amount, boolean simulate) {
+            ItemStack stack = patternStorage.getStackInSlot(slot);
+            if (stack.isEmpty()) {
+                return ItemStack.EMPTY;
+            }
+
+            int toExtract = Math.min(amount, stack.getCount());
+            if (!simulate) {
+                ItemStack copy = stack.copy();
+                copy.setCount(toExtract);
+                ItemStack remaining = stack.copy();
+                remaining.shrink(toExtract);
+                patternStorage.setItemDirect(slot, remaining.isEmpty() ? ItemStack.EMPTY : remaining);
+                setChanged();
+                return copy;
+            }
+
+            ItemStack copy = stack.copy();
+            copy.setCount(toExtract);
+            return copy;
+        }
+
+        @Override
+        public int getSlotLimit(int slot) {
+            return 1; // 每个槽位只能放一个样板
+        }
+
+        @Override
+        public boolean isItemValid(int slot, ItemStack stack) {
+            return isEncodedPattern(stack);
+        }
+    }
+
+
     public PatternRouterBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.PATTERN_ROUTER_BE.get(), pos, state);
 
         // 创建样板存储
         this.patternStorage = new AppEngInternalInventory(this, 9, 1);
+
+        // 创建 ItemHandler 包装器，允许漏斗输入
+        this.itemHandlerCap = LazyOptional.of(() -> new PatternRouterItemHandler());
 
         // 创建网格节点
         this.managedNode = GridHelper.createManagedNode(this, NodeListener.INSTANCE);
@@ -65,14 +149,10 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
     @Override
     public void onLoad() {
         super.onLoad();
-        System.out.println("[PatternRouterBlockEntity] onLoad() called, isClientSide: " + (this.level != null && this.level.isClientSide));
         if (this.level != null && !this.level.isClientSide) {
-            System.out.println("[PatternRouterBlockEntity] Server side onLoad");
             GridHelper.onFirstTick(this, be -> {
-                System.out.println("[PatternRouterBlockEntity] First tick, creating grid node");
                 be.managedNode.create(be.getLevel(), be.getBlockPos());
                 be.insertionManager = new PatternInsertionManager();
-                System.out.println("[PatternRouterBlockEntity] Initialization complete");
             });
         }
     }
@@ -83,20 +163,16 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
     private class Ticker implements IGridTickable {
         @Override
         public TickingRequest getTickingRequest(IGridNode node) {
-            System.out.println("[PatternRouterBlockEntity.Ticker] getTickingRequest() called, hasWorkToDo: " + hasWorkToDo());
             return new TickingRequest(TickRates.Interface, !hasWorkToDo(), false);
         }
 
         @Override
         public TickRateModulation tickingRequest(IGridNode node, int ticksSinceLastCall) {
-            System.out.println("[PatternRouterBlockEntity.Ticker] tickingRequest() called");
             if (!managedNode.isActive()) {
-                System.out.println("[PatternRouterBlockEntity.Ticker] Node not active, sleeping");
                 return TickRateModulation.SLEEP;
             }
 
             boolean didWork = tryInsertPatterns();
-            System.out.println("[PatternRouterBlockEntity.Ticker] didWork: " + didWork + ", hasWork: " + hasWorkToDo());
             return hasWorkToDo() ?
                 (didWork ? TickRateModulation.URGENT : TickRateModulation.SLOWER) :
                 TickRateModulation.SLEEP;
@@ -181,6 +257,7 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
         if (this.managedNode != null) {
             this.managedNode.destroy();
         }
+        this.itemHandlerCap.invalidate();
     }
 
     @Override
@@ -189,6 +266,17 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
         if (this.managedNode != null) {
             this.managedNode.destroy();
         }
+        this.itemHandlerCap.invalidate();
+    }
+
+    // ========== Capability 支持 ==========
+
+    @Override
+    public <T> LazyOptional<T> getCapability(Capability<T> cap, @Nullable Direction side) {
+        if (cap == ForgeCapabilities.ITEM_HANDLER) {
+            return this.itemHandlerCap.cast();
+        }
+        return super.getCapability(cap, side);
     }
 
     // ========== InternalInventoryHost 实现 ==========
@@ -248,23 +336,5 @@ public class PatternRouterBlockEntity extends BlockEntity implements IInWorldGri
 
     public AppEngInternalInventory getPatternStorage() {
         return patternStorage;
-    }
-
-    // ========== MenuProvider 实现 ==========
-
-    @Override
-    public Component getDisplayName() {
-        System.out.println("[PatternRouterBlockEntity] getDisplayName() called");
-        return Component.translatable("block.extendedae_plus.pattern_router");
-    }
-
-    @Nullable
-    @Override
-    public AbstractContainerMenu createMenu(int containerId, Inventory playerInventory, Player player) {
-        System.out.println("[PatternRouterBlockEntity] createMenu() called for player: " + (player == null ? "null" : player.getName().getString()));
-        System.out.println("[PatternRouterBlockEntity] patternStorage size: " + this.patternStorage.size());
-        PatternRouterMenu menu = new PatternRouterMenu(containerId, playerInventory, this);
-        System.out.println("[PatternRouterBlockEntity] Menu created successfully");
-        return menu;
     }
 }

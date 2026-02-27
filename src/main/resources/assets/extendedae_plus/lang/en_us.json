@@ -246,6 +246,8 @@
   "message.extendedae_plus.router.providers_full": "Pattern [%s]: All matching providers are full. Please add more pattern providers or remove some patterns",
   "message.extendedae_plus.router.pattern_inserted": "Pattern [%s] successfully inserted into pattern provider",
 
+  "extendedae_plus.pattern_suffix.crafting": "Molecular Assembler",
+
   "key.extendedae_plus.create_pattern": "Create Pattern from JEI",
   "key.categories.extendedae_plus": "ExtendedAE Plus"
 }

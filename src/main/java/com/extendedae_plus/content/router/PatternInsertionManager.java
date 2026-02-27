@@ -7,6 +7,8 @@ import appeng.helpers.patternprovider.PatternProviderLogic;
 import appeng.helpers.patternprovider.PatternProviderLogicHost;
 import appeng.parts.crafting.PatternProviderPart;
 import com.extendedae_plus.mixin.ae2.accessor.PatternProviderLogicAccessor;
+import com.glodblock.github.extendedae.common.tileentities.TileExPatternProvider;
+import com.glodblock.github.extendedae.common.parts.PartExPatternProvider;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -46,9 +48,7 @@ public class PatternInsertionManager {
                                   IGrid grid,
                                   @Nullable ServerPlayer player,
                                   BlockPos busPos) {
-        System.out.println("[PatternInsertionManager] insertPattern() called");
-        System.out.println("[PatternInsertionManager] patternStack: " + patternStack);
-        LOGGER.info("========== [样板输入总线] 尝试插入样板 ==========");
+        LOGGER.info("========== [样板路由器] 尝试插入样板 ==========");
         LOGGER.info("样板ItemStack: {}", patternStack);
 
         // 1. 提取样板自定义名称的后缀
@@ -142,39 +142,31 @@ public class PatternInsertionManager {
      * 格式: "输出物品_配方类型" → 提取 "配方类型"
      */
     private String extractSuffix(ItemStack patternStack) {
-        System.out.println("[PatternInsertionManager] extractSuffix() called");
         LOGGER.info("---------- 开始提取样板后缀 ----------");
         try {
             if (!patternStack.hasCustomHoverName()) {
-                System.out.println("[PatternInsertionManager] no custom hover name");
                 LOGGER.info("样板没有自定义hover名称");
                 return null;
             }
 
             String name = patternStack.getHoverName().getString();
-            System.out.println("[PatternInsertionManager] pattern name: " + name);
             LOGGER.info("自定义HoverName: {}", name);
 
             // 使用下划线分隔符
             int separatorIndex = name.lastIndexOf("_");
-            System.out.println("[PatternInsertionManager] separator index: " + separatorIndex);
             LOGGER.info("分隔符位置: {}", separatorIndex);
 
             if (separatorIndex != -1) {
                 String suffix = name.substring(separatorIndex + 1).trim();
-                System.out.println("[PatternInsertionManager] extracted suffix: " + suffix);
                 LOGGER.info("提取到的后缀: {}", suffix);
                 return suffix;
             } else {
-                System.out.println("[PatternInsertionManager] separator '_' not found");
                 LOGGER.info("未找到分隔符 '_'");
             }
 
             return null;
 
         } catch (Exception e) {
-            System.out.println("[PatternInsertionManager] exception in extractSuffix: " + e.getMessage());
-            e.printStackTrace();
             LOGGER.error("提取样板后缀时发生异常", e);
             return null;
         }
@@ -211,6 +203,19 @@ public class PatternInsertionManager {
             LOGGER.error("收集PatternProviderBlockEntity时出错", e);
         }
 
+        // Extended AE: TileExPatternProvider（36格扩展供应器）
+        try {
+            Set<TileExPatternProvider> exProviders = grid.getMachines(TileExPatternProvider.class);
+            LOGGER.info("找到 {} 个TileExPatternProvider", exProviders.size());
+            for (TileExPatternProvider provider : exProviders) {
+                if (provider != null && provider.getLogic() != null) {
+                    allLogics.add(provider.getLogic());
+                }
+            }
+        } catch (Throwable e) {
+            LOGGER.warn("收集TileExPatternProvider时出错: {}", e.getMessage());
+        }
+
         try {
             // Part形式的样板供应器
             Set<PatternProviderPart> parts = grid.getMachines(PatternProviderPart.class);
@@ -222,6 +227,19 @@ public class PatternInsertionManager {
             }
         } catch (Throwable e) {
             LOGGER.error("收集PatternProviderPart时出错", e);
+        }
+
+        // Extended AE: PartExPatternProvider（Part形式的扩展供应器）
+        try {
+            Set<PartExPatternProvider> exParts = grid.getMachines(PartExPatternProvider.class);
+            LOGGER.info("找到 {} 个PartExPatternProvider", exParts.size());
+            for (PartExPatternProvider part : exParts) {
+                if (part != null && part.getLogic() != null) {
+                    allLogics.add(part.getLogic());
+                }
+            }
+        } catch (Throwable e) {
+            LOGGER.warn("收集PartExPatternProvider时出错: {}", e.getMessage());
         }
 
         try {

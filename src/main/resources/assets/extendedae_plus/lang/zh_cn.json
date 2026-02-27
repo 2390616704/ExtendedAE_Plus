@@ -245,6 +245,8 @@
   "message.extendedae_plus.router.providers_full": "样板 [%s] 的所有匹配供应器都已满。请添加更多样板供应器或移除一些样板",
   "message.extendedae_plus.router.pattern_inserted": "样板 [%s] 已成功插入样板供应器",
 
+  "extendedae_plus.pattern_suffix.crafting": "分子装配室",
+
   "key.extendedae_plus.create_pattern": "从JEI创建样板",
   "key.categories.extendedae_plus": "ExtendedAE Plus"
 }

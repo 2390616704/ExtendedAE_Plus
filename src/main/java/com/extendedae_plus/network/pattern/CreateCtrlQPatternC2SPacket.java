@@ -184,6 +184,15 @@ public class CreateCtrlQPatternC2SPacket {
                     false  // allowFluidSubstitutes - 不允许流体替代
                 );
 
+                // 为合成样板设置自定义名称：输出物品名称 + 分子装配室后缀
+                if (!encodedPattern.isEmpty()) {
+                    String outputName = output.getHoverName().getString();
+                    // 使用翻译键从语言文件读取后缀值
+                    Component suffix = Component.translatable("extendedae_plus.pattern_suffix.crafting");
+                    Component customName = Component.literal(outputName + "_").append(suffix);
+                    encodedPattern.setHoverName(customName);
+                }
+
                 return encodedPattern;
 
             } else {
@@ -223,7 +232,7 @@ public class CreateCtrlQPatternC2SPacket {
                     String recipeTypeName = recipe.getClass().getSimpleName()
                             .replaceAll("Recipe(s)?$", "")
                             .replaceAll("Category$", "");
-                    Component customName = Component.literal(outputName + " - " + recipeTypeName);
+                    Component customName = Component.literal(outputName + "_" + recipeTypeName);
                     encodedPattern.setHoverName(customName);
                 }
 
