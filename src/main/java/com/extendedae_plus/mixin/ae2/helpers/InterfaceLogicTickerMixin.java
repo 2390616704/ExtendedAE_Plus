@@ -15,8 +15,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(targets = "appeng.helpers.InterfaceLogic$Ticker")
 public abstract class InterfaceLogicTickerMixin {
 
-    // Mixin 访问内部类的外部引用字段（javac 生成名 this$0）
-    @Shadow(remap = false)
+    // Mixin 访问内部类的外部引用字段（javac 生成名 this$0）@Shadow(remap = false)
     @Final
     private InterfaceLogic this$0;
 

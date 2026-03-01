@@ -49,7 +49,9 @@ public class ProviderSelectScreen extends Screen {
 
     // 页面
     private int page = 0;
-    private static final int PAGE_SIZE = 6;
+    private static final int COLUMNS = 2; // 列数
+    private static final int ROWS = 6;    // 行数
+    private static final int PAGE_SIZE = COLUMNS * ROWS; // 每页显示数量
 
     // 按钮池
     private final List<Button> entryButtons = new ArrayList<>();
@@ -70,8 +72,8 @@ public class ProviderSelectScreen extends Screen {
             String recent = RecipeTypeNameConfig.lastProcessingName;
             if (recent != null && !recent.isBlank()) {
                 this.query = recent;
-                // 用后即清空，避免污染下次
-                RecipeTypeNameConfig.lastProcessingName = null;
+                // 不清空，允许玩家手动编辑或删除
+                // 玩家可以自行删除不需要的搜索键
             }
         } catch (Throwable ignored) {}
         buildGroups();
@@ -89,6 +91,7 @@ public class ProviderSelectScreen extends Screen {
         // 搜索框（置于条目上方）
         if (searchBox == null) {
             searchBox = new EditBox(this.font, centerX - 120, startY - 25, 240, 18, Component.translatable("extendedae_plus.screen.search"));
+            searchBox.setMaxLength(1000);
         } else {
             // 重新定位，保持输入值
             searchBox.setX(centerX - 120);
@@ -106,18 +109,30 @@ public class ProviderSelectScreen extends Screen {
         });
         this.addRenderableWidget(searchBox);
 
-        // 初始化按钮池
+        // 初始化按钮池 - 多列布局
         int buttonWidth = 240;
         int buttonHeight = 20;
         int gap = 5;
+        int columnGap = 10; // 列之间的间距
+
+        // 计算起始X坐标，使按钮居中
+        int totalWidth = COLUMNS * buttonWidth + (COLUMNS - 1) * columnGap;
+        int startX = centerX - totalWidth / 2;
+
         for (int i = 0; i < PAGE_SIZE; i++) {
             int btnIdx = i;
+            int row = i / COLUMNS;
+            int col = i % COLUMNS;
+
+            int x = startX + col * (buttonWidth + columnGap);
+            int y = startY + row * (buttonHeight + gap);
+
             Button btn = Button.builder(Component.literal(""), b -> {
                         int actualIdx = buttonIndexMap[btnIdx];
                         if (actualIdx >= 0 && actualIdx < fIds.size()) {
                             onChoose(actualIdx);
                         }
-                    }).bounds(centerX - buttonWidth / 2, startY + i * (buttonHeight + gap), buttonWidth, buttonHeight)
+                    }).bounds(x, y, buttonWidth, buttonHeight)
                     .build();
             entryButtons.add(btn);
             buttonIndexMap[i] = -1; // 初始化为无效索引
@@ -125,7 +140,7 @@ public class ProviderSelectScreen extends Screen {
         }
 
         // 分页按钮
-        int navY = startY + PAGE_SIZE * (buttonHeight + gap) + 10;
+        int navY = startY + ROWS * (buttonHeight + gap) + 10;
         prevButton = Button.builder(Component.literal("<"), b -> changePage(-1))
                 .bounds(centerX - 60, navY, 20, 20)
                 .build();
@@ -141,9 +156,7 @@ public class ProviderSelectScreen extends Screen {
         int inputWidth = 120;
         int btnGap = 5;
 
-        // 总宽度 = 重载按钮 + 输入框 + 添加 + 删除 + 关闭按钮 + 间距
-        int totalWidth = btnWidth2 + btnGap + inputWidth + btnGap + btnWidth2 * 2 + btnGap + btnWidth2;
-        int startX = centerX - totalWidth / 2;
+
 
         // 重载映射按钮
         Button reload = Button.builder(Component.translatable("extendedae_plus.screen.reload_mapping"), b -> reloadMapping())
@@ -352,33 +365,77 @@ public class ProviderSelectScreen extends Screen {
     private static Boolean JEC_AVAILABLE = null;
     private static java.lang.reflect.Method JEC_CONTAINS = null;
 
+    /**
+     * 检查供应器名称是否匹配搜索键
+     * 支持多个搜索键（逗号分隔），使用OR逻辑
+     * 示例："熔炉,高炉" 匹配名称包含"熔炉"或"高炉"的供应器
+     */
     private static boolean nameMatches(String name, String key, String keyLower) {
         if (name == null) return false;
         if (key == null || key.isEmpty()) return true;
-
-        try {
-            if (JEC_AVAILABLE == null) {
-                try {
-                    Class<?> cls = Class.forName("me.towdium.jecharacters.utils.Match");
-                    // 使用 contains(CharSequence, CharSequence)
-                    JEC_CONTAINS = cls.getMethod("contains", CharSequence.class, CharSequence.class);
-                    JEC_AVAILABLE = true;
-                } catch (Throwable t) {
-                    JEC_AVAILABLE = false;
-                }
-            }
-            if (Boolean.TRUE.equals(JEC_AVAILABLE) && JEC_CONTAINS != null) {
-                Object r = JEC_CONTAINS.invoke(null, name, key);
-                if (r instanceof Boolean && (Boolean) r) return true;
-                // 再尝试大小写不敏感：双方转为小写重新匹配
-                Object r2 = JEC_CONTAINS.invoke(null, name.toLowerCase(Locale.ROOT), keyLower);
-                if (r2 instanceof Boolean && (Boolean) r2) return true;
-            }
-        } catch (Throwable ignored) {
-            // 回退
+        
+        // 支持逗号分隔的多个搜索键
+        // 格式："搜索键1,搜索键2,搜索键3"
+        // 匹配规则：供应器名称包含任意一个搜索键（OR逻辑）
+        String[] keys = key.split(",");
+        String[] keysLower = keyLower.split(",");
+        
+        // 清理搜索键（去除空格）
+        for (int i = 0; i < keys.length; i++) {
+            keys[i] = keys[i].trim();
+            keysLower[i] = keysLower[i].trim();
         }
-        // 默认大小写不敏感子串
-        return name.toLowerCase(Locale.ROOT).contains(keyLower);
+        
+        // 检查每个搜索键
+        for (int i = 0; i < keys.length; i++) {
+            String singleKey = keys[i];
+            String singleKeyLower = keysLower[i];
+            
+            if (singleKey.isEmpty()) {
+                continue; // 跳过空的搜索键
+            }
+            
+            boolean matched = false;
+            try {
+                if (JEC_AVAILABLE == null) {
+                    try {
+                        Class<?> cls = Class.forName("me.towdium.jecharacters.utils.Match");
+                        // 使用 contains(CharSequence, CharSequence)
+                        JEC_CONTAINS = cls.getMethod("contains", CharSequence.class, CharSequence.class);
+                        JEC_AVAILABLE = true;
+                    } catch (Throwable t) {
+                        JEC_AVAILABLE = false;
+                    }
+                }
+                if (Boolean.TRUE.equals(JEC_AVAILABLE) && JEC_CONTAINS != null) {
+                    Object r = JEC_CONTAINS.invoke(null, name, singleKey);
+                    if (r instanceof Boolean && (Boolean) r) {
+                        matched = true;
+                    } else {
+                        // 再尝试大小写不敏感：双方转为小写重新匹配
+                        Object r2 = JEC_CONTAINS.invoke(null, name.toLowerCase(Locale.ROOT), singleKeyLower);
+                        if (r2 instanceof Boolean && (Boolean) r2) {
+                            matched = true;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+                // 回退
+            }
+            
+            // 默认大小写不敏感子串
+            if (!matched) {
+                matched = name.toLowerCase(Locale.ROOT).contains(singleKeyLower);
+            }
+            
+            // 如果有一个搜索键匹配，则整个匹配（OR逻辑）
+            if (matched) {
+                return true;
+            }
+        }
+        
+        // 没有任何搜索键匹配
+        return false;
     }
 
     // 自然排序比较方法

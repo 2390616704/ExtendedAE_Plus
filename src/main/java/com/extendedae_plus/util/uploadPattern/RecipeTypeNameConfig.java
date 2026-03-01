@@ -1,9 +1,16 @@
 package com.extendedae_plus.util.uploadPattern;
 
+import com.extendedae_plus.integration.jei.JeiRuntimeProxy;
 import com.google.gson.*;
+import mezz.jei.api.constants.VanillaTypes;
+import mezz.jei.api.gui.drawable.IDrawable;
+import mezz.jei.api.recipe.IRecipeManager;
+import mezz.jei.api.recipe.category.IRecipeCategory;
+import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraftforge.fml.loading.FMLPaths;
@@ -16,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static com.extendedae_plus.util.GlobalSendMessage.sendPlayerMessage;
@@ -42,10 +50,40 @@ public final class RecipeTypeNameConfig {
 
     private RecipeTypeNameConfig() {}
 
-    // 最近一次通过 JEI 填充到编码终端的“处理配方”的中文名称（如：烧炼/高炉/烟熏...）
-    public static volatile String lastProcessingName = null;
+    // 最近通过 JEI 填充到编码终端的处理配方的搜索键列表，用逗号分隔
+    // 例如："熔炉,高炉,组装机"
+    public static volatile String lastProcessingName = "分子装配室,熔炉";//比填写null强
     public static void setLastProcessingName(String name) {
         lastProcessingName = name;
+    }
+    
+    /**
+     * 追加搜索键到lastProcessingName，用逗号分隔
+     * 如果name已存在，则不重复添加
+     */
+    public static void appendLastProcessingName(String name) {
+        if (name == null || name.isBlank()) {
+            return;
+        }
+
+        String trimmedName = name.trim();
+
+        if (lastProcessingName == null || lastProcessingName.isBlank()) {
+            lastProcessingName = trimmedName;
+            return;
+        }
+
+        // 分割现有的搜索键
+        String[] existingKeys = lastProcessingName.split(",");
+        for (String existingKey : existingKeys) {
+            if (existingKey.trim().equals(trimmedName)) {
+                // 已存在，不重复添加
+                return;
+            }
+        }
+
+        // 追加新的搜索键（无长度限制）
+        lastProcessingName = lastProcessingName + "," + trimmedName;
     }
 
     /**
@@ -244,6 +282,7 @@ public final class RecipeTypeNameConfig {
         if (recipe == null) return null;
         RecipeType<?> type = recipe.getType();
         ResourceLocation key = BuiltInRegistries.RECIPE_TYPE.getKey(type);
+        if (key == null) return type.toString();//至少'能量处理器'配方会走这里
         return mapRecipeTypeIdToSearchKey(key);
     }
 
@@ -344,5 +383,190 @@ public final class RecipeTypeNameConfig {
                 .toLowerCase()
                 .trim();
         return s.isBlank() ? null : s;
+    }
+
+    /**
+     * 通过 JEI API 获取配方对应工作方块的本地化名称
+     *
+     * @param recipe 配方对象
+     * @return 工作方块的本地化名称，失败返回 null
+     */
+    public static String getWorkstationNameFromJEI(Recipe<?> recipe) {
+        if (recipe == null) {
+            return null;
+        }
+
+        IJeiRuntime runtime = JeiRuntimeProxy.get();
+        if (runtime == null) {
+            EAP$LOGGER.debug("[JEI] JEI Runtime 未初始化，无法获取工作方块名称");
+            return null;
+        }
+
+        try {
+            IRecipeManager recipeManager = runtime.getRecipeManager();
+
+            // 遍历所有 JEI 配方类别 todo 类别优先选玩家收藏的jei书签里的工作方块的类别
+            for (IRecipeCategory<?> category : recipeManager.createRecipeCategoryLookup().get().toList()) {
+                try {
+                    mezz.jei.api.recipe.RecipeType<?> jeiRecipeType = category.getRecipeType();
+
+                    // 获取该类别的所有配方
+                    List<?> recipesInCategory = recipeManager.createRecipeLookup(jeiRecipeType)
+                        .get()
+                        .toList();
+
+                    // 检查当前配方是否在此类别中
+                    boolean found = false;
+                    for (Object recipeObj : recipesInCategory) {
+                        if (recipeObj == recipe) {
+                            found = true;
+                            break;
+                        }
+                        // 也比对 recipe ID
+                        if (recipeObj instanceof Recipe<?> r && r.getId().equals(recipe.getId())) {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        continue;
+                    }
+
+                    EAP$LOGGER.debug("[JEI] 找到配方对应的类别: {}", category.getClass().getSimpleName());
+
+                    // 方式1：优先从图标获取（图标通常是工作方块的ItemStack）
+                    IDrawable icon = category.getIcon();
+                    if (icon != null) {
+                        String iconName = extractWorkstationNameFromIcon(runtime, icon);
+                        if (iconName != null && !iconName.isBlank()) {
+                            EAP$LOGGER.info("[JEI] 从图标获取工作方块名称: {}", iconName);
+                            return iconName;
+                        }
+                    }
+
+                    // 方式2：从类别标题获取（通常就是工作方块名称）
+                    Component title = category.getTitle();
+                    if (title != null) {
+                        String titleStr = title.getString();
+                        if (titleStr != null && !titleStr.isBlank()) {
+                            EAP$LOGGER.info("[JEI] 从类别标题获取工作方块名称: {}", titleStr);
+                            return titleStr;
+                        }
+                    }
+
+                } catch (Exception e) {
+                    EAP$LOGGER.debug("[JEI] 处理类别时出错: {}", e.getMessage());
+                }
+            }
+
+            EAP$LOGGER.warn("[JEI] 未找到配方 {} 对应的 JEI 类别", recipe.getId());
+
+        } catch (Exception e) {
+            EAP$LOGGER.error("[JEI] 获取工作方块名称时发生异常", e);
+        }
+
+        return null;
+    }
+
+    /**
+     * 从 IDrawable 图标中提取工作方块名称
+     * 优先使用 JEI 的公开 API，如果失败则尝试反射
+     *
+     * @param runtime JEI 运行时
+     * @param icon    图标对象
+     * @return 工作方块的本地化名称，失败返回 null
+     */
+    private static String extractWorkstationNameFromIcon(IJeiRuntime runtime, IDrawable icon) {
+        if (runtime == null || icon == null) {
+            return null;
+        }
+
+        try {
+            // 方式1：尝试通过 JEI 的 IngredientManager 提取（如果icon实现了相关接口）
+            // 某些 IDrawable 实现可能提供了获取底层ingredient的方法
+            Class<?> iconClass = icon.getClass();
+            String className = iconClass.getName();
+
+            // 常见的 JEI Drawable 类型：ItemStackRenderer, DrawableIngredient 等
+            EAP$LOGGER.debug("[JEI] Icon 类型: {}", className);
+
+            // 方式2：反射获取 ItemStack 字段（作为回退方案）
+            // JEI 的 ItemStackRenderer 通常包含一个 itemStack 字段
+            java.lang.reflect.Field[] fields = iconClass.getDeclaredFields();
+            for (java.lang.reflect.Field field : fields) {
+                // 查找 ItemStack 类型的字段
+                if (field.getType() == ItemStack.class ||
+                    field.getName().toLowerCase().contains("itemstack") ||
+                    field.getName().toLowerCase().contains("stack") ||
+                    field.getName().toLowerCase().contains("item")) {
+
+                    field.setAccessible(true);
+                    Object value = field.get(icon);
+
+                    if (value instanceof ItemStack stack && !stack.isEmpty()) {
+                        // 获取物品的本地化名称
+                        String name = stack.getHoverName().getString();
+                        EAP$LOGGER.debug("[JEI] 从图标字段 '{}' 提取到方块名称: {}", field.getName(), name);
+                        return name;
+                    }
+                }
+
+                // 查找可能是 List<ItemStack> 或 ItemStack[] 的字段
+                if (field.getName().toLowerCase().contains("stacks") ||
+                    field.getName().toLowerCase().contains("items")) {
+
+                    field.setAccessible(true);
+                    Object value = field.get(icon);
+
+                    if (value instanceof List<?> list && !list.isEmpty()) {
+                        Object first = list.get(0);
+                        if (first instanceof ItemStack stack && !stack.isEmpty()) {
+                            String name = stack.getHoverName().getString();
+                            EAP$LOGGER.debug("[JEI] 从图标列表字段 '{}' 提取到方块名称: {}", field.getName(), name);
+                            return name;
+                        }
+                    }
+
+                    if (value != null && value.getClass().isArray()) {
+                        Object[] arr = (Object[]) value;
+                        if (arr.length > 0 && arr[0] instanceof ItemStack stack && !stack.isEmpty()) {
+                            String name = stack.getHoverName().getString();
+                            EAP$LOGGER.debug("[JEI] 从图标数组字段 '{}' 提取到方块名称: {}", field.getName(), name);
+                            return name;
+                        }
+                    }
+                }
+            }
+
+            // 方式3：尝试调用可能的 getter 方法
+            Method[] methods = iconClass.getMethods();
+            for (Method method : methods) {
+                if (method.getParameterCount() != 0) {
+                    continue;
+                }
+
+                String methodName = method.getName();
+                // 查找可能返回 ItemStack 的方法
+                if ((methodName.equals("getItemStack") ||
+                     methodName.equals("getStack") ||
+                     methodName.equals("getItem")) &&
+                    method.getReturnType() == ItemStack.class) {
+
+                    Object result = method.invoke(icon);
+                    if (result instanceof ItemStack stack && !stack.isEmpty()) {
+                        String name = stack.getHoverName().getString();
+                        EAP$LOGGER.debug("[JEI] 从图标方法 '{}' 提取到方块名称: {}", methodName, name);
+                        return name;
+                    }
+                }
+            }
+
+            EAP$LOGGER.debug("[JEI] 无法从图标 {} 提取方块名称", className);
+        } catch (Exception e) {
+            EAP$LOGGER.debug("[JEI] 从图标提取方块名称失败: {}", e.getMessage());
+        }
+
+        return null;
     }
 }

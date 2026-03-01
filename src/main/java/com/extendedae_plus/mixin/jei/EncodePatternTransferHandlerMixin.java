@@ -52,7 +52,7 @@ public abstract class EncodePatternTransferHandlerMixin {
             name = RecipeTypeNameConfig.deriveSearchKeyFromUnknownRecipe(recipeBase);
         }
         if (name != null && !name.isBlank()) {
-            RecipeTypeNameConfig.setLastProcessingName(name);
+            RecipeTypeNameConfig.appendLastProcessingName(name);
         }
     }
 }

@@ -28,6 +28,9 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.item.crafting.RecipeType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import net.minecraft.world.item.crafting.SmithingRecipe;
 import net.minecraft.world.item.crafting.StonecutterRecipe;
 import net.minecraftforge.network.NetworkEvent;
@@ -48,6 +51,7 @@ import java.util.function.Supplier;
  * C2S: Ctrl+Q 快速创建样板。
  */
 public class CreateCtrlQPatternC2SPacket {
+    private static final Logger LOGGER = LoggerFactory.getLogger(CreateCtrlQPatternC2SPacket.class);
     private static final String LAST_CTRLQ_HASH_KEY = "eap_ctrlq_last_request_hash";
     private static final String LAST_CTRLQ_TICK_KEY = "eap_ctrlq_last_request_tick";
 
@@ -833,33 +837,53 @@ public class CreateCtrlQPatternC2SPacket {
     }
 
     /**
-     * 添加配方类型后缀到样板名称
-     * 格式: "物品名_配方类型后缀"
+     * 添加工作方块后缀到样板名称
+     * 格式: "物品名_工作方块名称"
+     *
+     * 通过 JEI API 动态获取工作方块的本地化名称（如"熔炉"、"压印器"等）
      */
     private static void addRecipeTypeSuffixToPattern(ItemStack pattern, Recipe<?> recipe, ItemStack outputItem) {
         if (pattern.isEmpty() || recipe == null || outputItem.isEmpty()) {
+            LOGGER.warn("[CTRL+Q] 添加后缀失败：参数为空 pattern={}, recipe={}, outputItem={}",
+                pattern.isEmpty(), recipe == null, outputItem.isEmpty());
             return;
         }
-        
+
         try {
-            // 获取配方类型搜索键
-            String searchKey = RecipeTypeNameConfig.mapRecipeTypeToSearchKey(recipe);
-            if (searchKey == null || searchKey.isBlank()) {
-                return;
+            // 通过 JEI 获取工作方块的本地化名称
+            String workstationName = RecipeTypeNameConfig.getWorkstationNameFromJEI(recipe);
+
+            // 回退方案：JEI 获取失败时使用配方类型路径
+            if (workstationName == null || workstationName.isBlank()) {
+                RecipeType<?> type = recipe.getType();
+                ResourceLocation key = BuiltInRegistries.RECIPE_TYPE.getKey(type);
+                workstationName = key != null ? key.getPath() : "unknown";
+                LOGGER.info("[CTRL+Q] JEI 获取失败，使用配方类型路径: {}", workstationName);
             }
-            
-            // 获取输出物品的名称
+
+            // 获取输出物品的本地化名称
             String itemName = outputItem.getHoverName().getString();
             if (itemName == null || itemName.isBlank()) {
                 itemName = outputItem.getDisplayName().getString();
+                LOGGER.debug("[CTRL+Q] 使用 displayName：{}", itemName);
             }
-            
-            // 创建新的样板名称: "物品名_配方类型后缀"
-            String patternName = itemName + "_" + searchKey;
+
+            if (itemName == null || itemName.isBlank()) {
+                LOGGER.warn("[CTRL+Q] 物品名称为空：outputItem={}", outputItem);
+                return;
+            }
+
+            // 创建新的样板名称: "物品名_工作方块名称"
+            String patternName = itemName + "_" + workstationName;
+            LOGGER.info("[CTRL+Q] 设置样板名称：{} (工作方块: {})", patternName, workstationName);
             pattern.setHoverName(net.minecraft.network.chat.Component.literal(patternName));
-            
+
+            // 验证是否设置成功
+            String finalName = pattern.getHoverName().getString();
+            LOGGER.debug("[CTRL+Q] 验证样板名称：设置前={}, 设置后={}", itemName, finalName);
+
         } catch (Exception e) {
-            // 静默失败，不影响样板创建
+            LOGGER.error("[CTRL+Q] 添加工作方块后缀时发生异常", e);
         }
     }
 
