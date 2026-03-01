@@ -20,6 +20,7 @@ import mezz.jei.api.recipe.category.IRecipeCategory;
 import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraftforge.fluids.FluidStack;
 import org.slf4j.Logger;
@@ -148,12 +149,18 @@ public class RecipeFinderUtil {
     }
 
     /**
-     * 从配方布局中提取完整的配方信息(支持物品和流体)
+     * 从配方中提取完整的配方信息（混合方案）
      *
-     * @param recipe 原始配方对象
-     * @param layout JEI 配方布局(包含完整的槽位和数量信息)
+     * <p><strong>混合提取策略（更准确）：</strong></p>
+     * <ul>
+     *   <li><strong>物品输入/输出</strong>：从 {@link Recipe} 对象直接获取（最准确）</li>
+     *   <li><strong>流体输入/输出</strong>：从 JEI 配方布局提取（Recipe API 不支持流体）</li>
+     * </ul>
+     *
+     * @param recipe 原始配方对象（用于物品信息）
+     * @param layout JEI 配方布局（仅用于流体信息）
      * @param isCrafting 是否为工作台配方
-     * @return 配方信息,如果提取失败返回 null
+     * @return 配方信息，如果提取失败返回 null
      */
     private static <T> RecipeInfo extractRecipeInfo(
         Recipe<?> recipe,
@@ -161,35 +168,76 @@ public class RecipeFinderUtil {
         boolean isCrafting
     ) {
         try {
-            IRecipeSlotsView slotsView = layout.getRecipeSlotsView();
-
-            // 提取输入槽位(支持物品和流体)
-            List<IRecipeSlotView> inputSlots = slotsView.getSlotViews(RecipeIngredientRole.INPUT);
+            // ========== 第一步：从 Recipe 对象提取物品输入（最准确） ==========
             List<List<GenericStack>> inputs = new ArrayList<>();
 
-            for (IRecipeSlotView slot : inputSlots) {
+            for (net.minecraft.world.item.crafting.Ingredient ingredient : recipe.getIngredients()) {
                 List<GenericStack> slotStacks = new ArrayList<>();
 
-                // 提取所有 ITypedIngredient
-                for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
-                    GenericStack genericStack = convertToGenericStack(typedIngredient);
-                    if (genericStack != null) {
-                        slotStacks.add(genericStack);
+                // 将 Ingredient 的所有可能物品转换为 GenericStack
+                for (ItemStack itemStack : ingredient.getItems()) {
+                    if (!itemStack.isEmpty()) {
+                        AEItemKey itemKey = AEItemKey.of(itemStack);
+                        if (itemKey != null) {
+                            slotStacks.add(new GenericStack(itemKey, itemStack.getCount()));
+                        }
                     }
                 }
 
                 inputs.add(slotStacks);
             }
 
-            // 提取输出槽位(支持物品和流体)
-            List<IRecipeSlotView> outputSlots = slotsView.getSlotViews(RecipeIngredientRole.OUTPUT);
+            // ========== 第二步：从 JEI 布局提取流体输入（Recipe API 不支持） ==========
+            IRecipeSlotsView slotsView = layout.getRecipeSlotsView();
+            List<IRecipeSlotView> inputSlots = slotsView.getSlotViews(RecipeIngredientRole.INPUT);
+
+            for (IRecipeSlotView slot : inputSlots) {
+                List<GenericStack> fluidStacks = new ArrayList<>();
+
+                // 只提取流体（物品已从 Recipe 获取）
+                for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
+                    if (typedIngredient.getType() == ForgeTypes.FLUID_STACK) {
+                        FluidStack fluidStack = (FluidStack) typedIngredient.getIngredient();
+                        if (!fluidStack.isEmpty()) {
+                            AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
+                            if (fluidKey != null) {
+                                fluidStacks.add(new GenericStack(fluidKey, fluidStack.getAmount()));
+                            }
+                        }
+                    }
+                }
+
+                // 如果这个槽位有流体，添加到 inputs
+                if (!fluidStacks.isEmpty()) {
+                    inputs.add(fluidStacks);
+                }
+            }
+
+            // ========== 第三步：从 Recipe 对象提取物品输出（最准确） ==========
             List<GenericStack> outputs = new ArrayList<>();
 
+            ItemStack resultItem = recipe.getResultItem(null);
+            if (!resultItem.isEmpty()) {
+                AEItemKey itemKey = AEItemKey.of(resultItem);
+                if (itemKey != null) {
+                    outputs.add(new GenericStack(itemKey, resultItem.getCount()));
+                }
+            }
+
+            // ========== 第四步：从 JEI 布局提取流体输出（Recipe API 不支持） ==========
+            List<IRecipeSlotView> outputSlots = slotsView.getSlotViews(RecipeIngredientRole.OUTPUT);
+
             for (IRecipeSlotView slot : outputSlots) {
+                // 只提取流体（物品已从 Recipe 获取）
                 for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
-                    GenericStack genericStack = convertToGenericStack(typedIngredient);
-                    if (genericStack != null) {
-                        outputs.add(genericStack);
+                    if (typedIngredient.getType() == ForgeTypes.FLUID_STACK) {
+                        FluidStack fluidStack = (FluidStack) typedIngredient.getIngredient();
+                        if (!fluidStack.isEmpty()) {
+                            AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
+                            if (fluidKey != null) {
+                                outputs.add(new GenericStack(fluidKey, fluidStack.getAmount()));
+                            }
+                        }
                     }
                 }
             }
@@ -201,37 +249,6 @@ public class RecipeFinderUtil {
                 recipe.getId(), e.getMessage());
             return null;
         }
-    }
-
-    /**
-     * 将 JEI 的 ITypedIngredient 转换为 AE2 的 GenericStack
-     *
-     * @param typedIngredient JEI 类型化材料
-     * @return AE2 GenericStack,如果不支持的类型返回 null
-     */
-    private static GenericStack convertToGenericStack(ITypedIngredient<?> typedIngredient) {
-        // 处理物品
-        if (typedIngredient.getType() == VanillaTypes.ITEM_STACK) {
-            ItemStack itemStack = (ItemStack) typedIngredient.getIngredient();
-            if (!itemStack.isEmpty()) {
-                AEItemKey itemKey = AEItemKey.of(itemStack);
-                if (itemKey != null) {
-                    return new GenericStack(itemKey, itemStack.getCount());
-                }
-            }
-        }
-        // 处理流体
-        else if (typedIngredient.getType() == ForgeTypes.FLUID_STACK) {
-            FluidStack fluidStack = (FluidStack) typedIngredient.getIngredient();
-            if (!fluidStack.isEmpty()) {
-                AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
-                if (fluidKey != null) {
-                    return new GenericStack(fluidKey, fluidStack.getAmount());
-                }
-            }
-        }
-
-        return null;
     }
 
     /**
