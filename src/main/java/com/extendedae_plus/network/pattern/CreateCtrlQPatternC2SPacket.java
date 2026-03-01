@@ -12,10 +12,12 @@ import appeng.items.tools.powered.WirelessCraftingTerminalItem;
 import appeng.items.tools.powered.WirelessTerminalItem;
 import appeng.me.helpers.PlayerSource;
 import com.extendedae_plus.util.uploadPattern.ProviderUploadUtil;
+import com.extendedae_plus.util.uploadPattern.RecipeTypeNameConfig;
 import com.extendedae_plus.util.wireless.WirelessTerminalLocator;
 import de.mari_023.ae2wtlib.terminal.WTMenuHost;
 import de.mari_023.ae2wtlib.wut.WTDefinition;
 import de.mari_023.ae2wtlib.wut.WUTHandler;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -25,7 +27,10 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeManager;
+import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraftforge.network.NetworkEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +40,7 @@ import java.util.function.Supplier;
  * C2S: Ctrl+Q quick-create pattern request.
  */
 public class CreateCtrlQPatternC2SPacket {
+    private static final Logger LOGGER = LoggerFactory.getLogger("ExtendedAE Plus - CtrlQ");
 
     private final ResourceLocation recipeId;
     private final boolean isCraftingPattern;
@@ -257,6 +263,7 @@ public class CreateCtrlQPatternC2SPacket {
                 );
 
                 encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+                addRecipeTypeSuffixToPattern(encodedPattern, recipe, output);
                 return encodedPattern;
             }
 
@@ -297,9 +304,71 @@ public class CreateCtrlQPatternC2SPacket {
             );
 
             encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
+
+            // 提取第一个输出用于命名
+            ItemStack firstOutput = selectedOutputs.isEmpty() ? ItemStack.EMPTY : selectedOutputs.get(0);
+            if (firstOutput.isEmpty() && recipe != null) {
+                firstOutput = recipe.getResultItem(player.level().registryAccess());
+            }
+            addRecipeTypeSuffixToPattern(encodedPattern, recipe, firstOutput);
+
             return encodedPattern;
         } catch (Exception e) {
             return ItemStack.EMPTY;
+        }
+    }
+
+    /**
+     * 为样板添加工作方块后缀
+     *
+     * <p>设置样板的显示名称为："物品名_工作方块名称"（如"铁锭_熔炉"）</p>
+     *
+     * @param pattern 已编码的样板ItemStack
+     * @param recipe 配方对象
+     * @param outputItem 输出物品（用于提取名称）
+     */
+    private static void addRecipeTypeSuffixToPattern(ItemStack pattern, Recipe<?> recipe, ItemStack outputItem) {
+        if (pattern.isEmpty() || recipe == null || outputItem.isEmpty()) {
+            LOGGER.warn("[CTRL+Q] 添加后缀失败：参数为空 pattern={}, recipe={}, outputItem={}",
+                pattern.isEmpty(), recipe == null, outputItem.isEmpty());
+            return;
+        }
+
+        try {
+            // 通过 JEI 获取工作方块的本地化名称
+            String workstationName = RecipeTypeNameConfig.getWorkstationNameFromJEI(recipe);
+
+            // 回退方案：JEI 获取失败时使用配方类型路径
+            if (workstationName == null || workstationName.isBlank()) {
+                RecipeType<?> type = recipe.getType();
+                ResourceLocation key = BuiltInRegistries.RECIPE_TYPE.getKey(type);
+                workstationName = key != null ? key.getPath() : "unknown";
+                LOGGER.info("[CTRL+Q] JEI 获取失败，使用配方类型路径: {}", workstationName);
+            }
+
+            // 获取输出物品的本地化名称
+            String itemName = outputItem.getHoverName().getString();
+            if (itemName == null || itemName.isBlank()) {
+                itemName = outputItem.getDisplayName().getString();
+                LOGGER.debug("[CTRL+Q] 使用 displayName：{}", itemName);
+            }
+
+            if (itemName == null || itemName.isBlank()) {
+                LOGGER.warn("[CTRL+Q] 物品名称为空：outputItem={}", outputItem);
+                return;
+            }
+
+            // 创建新的样板名称: "物品名_工作方块名称"
+            String patternName = itemName + "_" + workstationName;
+            LOGGER.info("[CTRL+Q] 设置样板名称：{} (工作方块: {})", patternName, workstationName);
+            pattern.setHoverName(Component.literal(patternName));
+
+            // 验证是否设置成功
+            String finalName = pattern.getHoverName().getString();
+            LOGGER.debug("[CTRL+Q] 验证样板名称：设置前={}, 设置后={}", itemName, finalName);
+
+        } catch (Exception e) {
+            LOGGER.error("[CTRL+Q] 添加工作方块后缀时发生异常", e);
         }
     }
 }
