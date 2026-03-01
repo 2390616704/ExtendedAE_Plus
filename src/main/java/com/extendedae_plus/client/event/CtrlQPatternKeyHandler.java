@@ -23,6 +23,9 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Mod.EventBusSubscriber(modid = ExtendedAEPlus.MODID, value = Dist.CLIENT)
 public class CtrlQPatternKeyHandler {
+    private static final Logger LOGGER = LoggerFactory.getLogger("ExtendedAE Plus - CtrlQ");
     private static boolean ctrlQKeyHeld;
 
     @SubscribeEvent
@@ -162,23 +166,46 @@ public class CtrlQPatternKeyHandler {
         Map<AEKey, Integer> priorities = new HashMap<>();
         AtomicInteger index = new AtomicInteger(Integer.MAX_VALUE);
 
+        LOGGER.info("[CTRL+Q] ========== 开始选择原材料 ==========");
+        LOGGER.info("[CTRL+Q] 配方: {}", recipe.getId());
+        LOGGER.info("[CTRL+Q] 书签数量: {}", bookmarks.size());
+
         for (ITypedIngredient<?> ingredient : bookmarks) {
-            ingredient.getIngredient(VanillaTypes.ITEM_STACK).ifPresent(itemStack ->
-                priorities.put(AEItemKey.of(itemStack), index.getAndDecrement())
-            );
+            ingredient.getIngredient(VanillaTypes.ITEM_STACK).ifPresent(itemStack -> {
+                AEKey key = AEItemKey.of(itemStack);
+                int priority = index.getAndDecrement();
+                priorities.put(key, priority);
+                LOGGER.info("[CTRL+Q]   书签: {} -> 优先级: {}",
+                    itemStack.getHoverName().getString(), priority);
+            });
         }
 
+        LOGGER.info("[CTRL+Q] 优先级映射完成，共 {} 个物品", priorities.size());
+
         List<ItemStack> selected = new ArrayList<>();
+        int ingredientIndex = 0;
         for (Ingredient ingredient : recipe.getIngredients()) {
+            LOGGER.info("[CTRL+Q] --- 原料槽 {} ---", ingredientIndex++);
+
             if (ingredient.isEmpty()) {
                 selected.add(ItemStack.EMPTY);
+                LOGGER.info("[CTRL+Q]   空原料，跳过");
                 continue;
             }
 
             ItemStack[] items = ingredient.getItems();
             if (items.length == 0) {
                 selected.add(ItemStack.EMPTY);
+                LOGGER.info("[CTRL+Q]   无可选物品，跳过");
                 continue;
+            }
+
+            LOGGER.info("[CTRL+Q]   可选物品数量: {}", items.length);
+            for (int i = 0; i < items.length; i++) {
+                AEKey key = AEItemKey.of(items[i]);
+                int priority = priorities.getOrDefault(key, Integer.MAX_VALUE);
+                LOGGER.info("[CTRL+Q]     [{}] {} -> 优先级: {}",
+                    i, items[i].getHoverName().getString(), priority);
             }
 
             ItemStack best = items[0];
@@ -194,11 +221,17 @@ public class CtrlQPatternKeyHandler {
                 if (priority < bestPriority) {
                     bestPriority = priority;
                     best = items[i];
+                    LOGGER.info("[CTRL+Q]     更新最佳: {} (优先级: {})",
+                        best.getHoverName().getString(), priority);
                 }
             }
+
+            LOGGER.info("[CTRL+Q]   ✓ 最终选择: {} (优先级: {})",
+                best.getHoverName().getString(), bestPriority);
             selected.add(best.copy());
         }
 
+        LOGGER.info("[CTRL+Q] ========== 原材料选择完成 ==========");
         return selected;
     }
 }

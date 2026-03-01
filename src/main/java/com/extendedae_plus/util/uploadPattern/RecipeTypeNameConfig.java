@@ -410,7 +410,7 @@ public final class RecipeTypeNameConfig {
         try {
             IRecipeManager recipeManager = runtime.getRecipeManager();
 
-            // 遍历所有 JEI 配方类别 todo 类别优先选玩家收藏的jei书签里的工作方块的类别
+            // 遍历所有 JEI 配方类别
             for (IRecipeCategory<?> category : recipeManager.createRecipeCategoryLookup().get().toList()) {
                 try {
                     mezz.jei.api.recipe.RecipeType<?> jeiRecipeType = category.getRecipeType();
@@ -440,22 +440,25 @@ public final class RecipeTypeNameConfig {
 
                     EAP$LOGGER.debug("[JEI] 找到配方对应的类别: {}", category.getClass().getSimpleName());
 
-                    // 方式1：优先从图标获取（图标通常是工作方块的ItemStack）
+                    // 方式1：优先从图标获取工作方块 ItemStack，然后获取其名称
                     IDrawable icon = category.getIcon();
                     if (icon != null) {
-                        String iconName = extractWorkstationNameFromIcon(runtime, icon);
-                        if (iconName != null && !iconName.isBlank()) {
-                            EAP$LOGGER.info("[JEI] 从图标获取工作方块名称: {}", iconName);
-                            return iconName;
+                        ItemStack workstationStack = extractWorkstationStackFromIcon(runtime, icon);
+                        if (!workstationStack.isEmpty()) {
+                            String workstationName = workstationStack.getHoverName().getString();
+                            if (workstationName != null && !workstationName.isBlank()) {
+                                EAP$LOGGER.info("[JEI] 从图标提取工作方块名称: {}", workstationName);
+                                return workstationName;
+                            }
                         }
                     }
 
-                    // 方式2：从类别标题获取（通常就是工作方块名称）
+                    // 方式2：从类别标题获取（兜底方案）
                     Component title = category.getTitle();
                     if (title != null) {
                         String titleStr = title.getString();
                         if (titleStr != null && !titleStr.isBlank()) {
-                            EAP$LOGGER.info("[JEI] 从类别标题获取工作方块名称: {}", titleStr);
+                            EAP$LOGGER.info("[JEI] 从类别标题获取名称: {}", titleStr);
                             return titleStr;
                         }
                     }
