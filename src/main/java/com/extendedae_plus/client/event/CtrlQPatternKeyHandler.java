@@ -106,6 +106,14 @@ public class CtrlQPatternKeyHandler {
         // 获取输出材料（转换为 ItemStack，流体会被包装）
         List<ItemStack> selectedOutputs = convertOutputsToItemStacks(selectedRecipeInfo);
 
+        // 对于加工配方（非矩阵配方），设置工作方块类别
+        Recipe<?> recipe = selectedRecipeInfo.getRecipe();
+        if (!selectedRecipeInfo.isCraftingRecipe() &&
+            !(recipe instanceof net.minecraft.world.item.crafting.StonecutterRecipe) &&
+            !(recipe instanceof net.minecraft.world.item.crafting.SmithingRecipe)) {
+            setLastProcessingNameFromRecipe(recipe);
+        }
+
         // 发送网络包到服务器
         ModNetwork.CHANNEL.sendToServer(new CreateCtrlQPatternC2SPacket(
             selectedRecipeInfo.getRecipe().getId(),
