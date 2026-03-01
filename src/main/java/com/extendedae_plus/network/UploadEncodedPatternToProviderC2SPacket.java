@@ -9,7 +9,7 @@ import net.minecraftforge.network.NetworkEvent;
 import java.util.function.Supplier;
 
 /**
- * C2S: Upload encoded pattern to selected provider.
+ * C2S: Request uploading an encoded pattern to a selected provider.
  */
 public class UploadEncodedPatternToProviderC2SPacket {
     private final long providerId;
@@ -30,21 +30,25 @@ public class UploadEncodedPatternToProviderC2SPacket {
         var ctx = ctxSupplier.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null) {
-                return;
+            if (player == null) return;
+
+            // Prefer pending Ctrl+Q pattern upload when present.
+            if (ProviderUploadUtil.hasPendingCtrlQPattern(player)) {
+                if (ProviderUploadUtil.uploadPendingCtrlQPattern(player, msg.providerId)) {
+                    return;
+                }
             }
 
             if (player.containerMenu instanceof PatternEncodingTermMenu menu) {
+                // 1) providerId >= 0: byId mode from access terminal
+                // 2) providerId < 0: index mode, index = -1 - providerId
                 if (msg.providerId >= 0) {
                     ProviderUploadUtil.uploadFromEncodingMenuToProvider(player, menu, msg.providerId);
                 } else {
                     int index = (int) (-1L - msg.providerId);
                     ProviderUploadUtil.uploadFromEncodingMenuToProviderByIndex(player, menu, index);
                 }
-                return;
             }
-
-            ProviderUploadUtil.uploadPendingCtrlQPattern(player, msg.providerId);
         });
         ctx.setPacketHandled(true);
     }

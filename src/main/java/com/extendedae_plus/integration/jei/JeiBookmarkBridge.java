@@ -11,7 +11,6 @@ import mezz.jei.gui.bookmarks.BookmarkList;
 import mezz.jei.gui.bookmarks.IngredientBookmark;
 import mezz.jei.gui.bookmarks.RecipeBookmark;
 import mezz.jei.gui.input.MouseUtil;
-import mezz.jei.gui.overlay.bookmarks.BookmarkOverlay;
 import mezz.jei.gui.overlay.elements.IElement;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.item.ItemStack;
@@ -313,6 +312,70 @@ public final class JeiBookmarkBridge {
             typeField = jeiCls.getField("TYPE_SLURRY");
         }
         return typeField;
+    }
+
+    /**
+     * 获取鼠标下的配方书签（如果存在）
+     * 
+     * @return 配方书签对象（RecipeBookmark<?, ?>），如果不是配方书签则返回空
+     */
+    public static Optional<?> getRecipeBookmarkUnderMouse() {
+        IJeiRuntime rt = getRuntime();
+        if (rt == null) return Optional.empty();
+        
+        IBookmarkOverlay bookmarkOverlay = rt.getBookmarkOverlay();
+        if (!(bookmarkOverlay instanceof BookmarkOverlayAccessor accessor)) {
+            return Optional.empty();
+        }
+
+        // 优先路径：直接从鼠标下 clickable 元素提取 bookmark（避免 typedIngredient equals 误判）
+        try {
+            var overlayObj = (Object) bookmarkOverlay;
+            var streamObj = overlayObj.getClass()
+                .getMethod("getIngredientUnderMouse", double.class, double.class)
+                .invoke(overlayObj, MouseUtil.getX(), MouseUtil.getY());
+            if (streamObj instanceof java.util.stream.Stream<?> stream) {
+                Object clickable = stream.findFirst().orElse(null);
+                if (clickable != null) {
+                    Object element = clickable.getClass().getMethod("getElement").invoke(clickable);
+                    if (element != null) {
+                        Object bookmarkOpt = element.getClass().getMethod("getBookmark").invoke(element);
+                        if (bookmarkOpt instanceof Optional<?> b && b.isPresent()) {
+                            Object bookmark = b.get();
+                            if (bookmark != null && "RecipeBookmark".equals(bookmark.getClass().getSimpleName())) {
+                                return Optional.of(bookmark);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        
+        // 获取鼠标下的元素
+        Optional<ITypedIngredient<?>> ingredientOpt = bookmarkOverlay.getIngredientUnderMouse();
+        if (ingredientOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        
+        // 遍历书签列表，查找匹配的配方书签
+        BookmarkList bookmarkList = accessor.eap$getBookmarkList();
+        for (IElement<?> element : bookmarkList.getElements()) {
+            // 检查元素的 TypedIngredient 是否匹配
+            if (element.getTypedIngredient().equals(ingredientOpt.get())) {
+                // 检查是否有关联的书签
+                Optional<?> bookmarkOpt = element.getBookmark();
+                if (bookmarkOpt.isPresent()) {
+                    Object bookmark = bookmarkOpt.get();
+                    // 判断是否为 RecipeBookmark（而非 IngredientBookmark）
+                    if (bookmark.getClass().getSimpleName().equals("RecipeBookmark")) {
+                        return Optional.of(bookmark);
+                    }
+                }
+            }
+        }
+        
+        return Optional.empty();
     }
 
     /**

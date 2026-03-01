@@ -162,21 +162,15 @@ public final class PatternTerminalUtil {
         try {
             IGridNode node = menu.getNetworkNode();
             if (node == null) return new ArrayList<>();
-            IGrid grid = node.getGrid();
-            return listAvailableProvidersFromGrid(grid);
+            return listAvailableProvidersFromGrid(node.getGrid());
         } catch (Throwable ignored) {
+            return new ArrayList<>();
         }
-        return new ArrayList<>();
     }
 
-    /**
-     * 基于 AE Grid 遍历，列出“可在终端中可见且有空位”的供应器容器。
-     */
     public static List<PatternContainer> listAvailableProvidersFromGrid(IGrid grid) {
         List<PatternContainer> list = new ArrayList<>();
-        if (grid == null) {
-            return list;
-        }
+        if (grid == null) return list;
         try {
             for (var machineClass : grid.getMachineClasses()) {
                 if (PatternContainer.class.isAssignableFrom(machineClass)) {
@@ -188,7 +182,10 @@ public final class PatternTerminalUtil {
                         if (inv == null || inv.size() <= 0) continue;
                         boolean hasEmpty = false;
                         for (int i = 0; i < inv.size(); i++) {
-                            if (inv.getStackInSlot(i).isEmpty()) { hasEmpty = true; break; }
+                            if (inv.getStackInSlot(i).isEmpty()) {
+                                hasEmpty = true;
+                                break;
+                            }
                         }
                         if (hasEmpty) list.add(container);
                     }
