@@ -40,6 +40,11 @@ public final class RecipeTypeNameConfig {
     private static final Map<String, String> CUSTOM_ALIASES = new ConcurrentHashMap<>();
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 
+    // 缓存工作方块映射，避免重复遍历 JEI 类别
+    private static volatile Map<net.minecraft.world.item.Item, java.util.Set<ResourceLocation>> WORKSTATION_MAPPING_CACHE = null;
+    private static volatile long CACHE_TIMESTAMP = 0;
+    private static final long CACHE_VALIDITY_MS = 30000; // 30 秒有效期
+
     static {
         try {
             loadRecipeTypeNames();
@@ -568,5 +573,334 @@ public final class RecipeTypeNameConfig {
         }
 
         return null;
+    }
+
+    /**
+     * 从 JEI 书签中提取所有工作方块物品
+     * 返回物品 ItemStack 列表，保持书签顺序
+     *
+     * @return 玩家收藏的所有物品（包含潜在的工作方块）
+     */
+    public static List<ItemStack> getBookmarkedWorkstations() {
+        EAP$LOGGER.debug("[JEI] >> getBookmarkedWorkstations");
+
+        List<? extends mezz.jei.api.ingredients.ITypedIngredient<?>> bookmarks = JeiRuntimeProxy.getBookmarkList();
+        if (bookmarks == null) {
+            EAP$LOGGER.debug("[JEI] << 书签列表为 null");
+            return java.util.Collections.emptyList();
+        }
+
+        if (bookmarks.isEmpty()) {
+            EAP$LOGGER.info("[JEI] << 玩家没有收藏任何书签");
+            return java.util.Collections.emptyList();
+        }
+
+        EAP$LOGGER.info("[JEI] 书签列表包含 {} 个项目", bookmarks.size());
+
+        List<ItemStack> workstations = new ArrayList<>();
+        for (int i = 0; i < bookmarks.size(); i++) {
+            mezz.jei.api.ingredients.ITypedIngredient<?> ingredient = bookmarks.get(i);
+            Optional<ItemStack> stack = ingredient.getIngredient(VanillaTypes.ITEM_STACK);
+            if (stack.isPresent()) {
+                ItemStack item = stack.get();
+                workstations.add(item);
+                EAP$LOGGER.debug("[JEI]   书签[{}]: {} (是 ItemStack)", i, item.getHoverName().getString());
+            } else {
+                EAP$LOGGER.debug("[JEI]   书签[{}]: 不是 ItemStack (类型: {})", i, ingredient.getType());
+            }
+        }
+
+        EAP$LOGGER.info("[JEI] << 提取到 {} 个物品书签", workstations.size());
+        return workstations;
+    }
+
+    /**
+     * 从 IDrawable 图标中提取工作方块 ItemStack（而非仅名称）
+     * 使用 JEI 的 DrawableIngredient 内部结构提取
+     *
+     * @param runtime JEI 运行时
+     * @param icon    图标对象
+     * @return 工作方块 ItemStack，失败返回空栈
+     */
+    private static ItemStack extractWorkstationStackFromIcon(IJeiRuntime runtime, IDrawable icon) {
+        if (runtime == null || icon == null) {
+            return ItemStack.EMPTY;
+        }
+
+        try {
+            Class<?> iconClass = icon.getClass();
+            String className = iconClass.getName();
+            EAP$LOGGER.debug("[JEI]     提取图标 ItemStack，图标类型: {}", className);
+
+            // 方式1：如果是 DrawableIngredient，直接提取 typedIngredient 字段
+            if (className.contains("DrawableIngredient")) {
+                java.lang.reflect.Field[] fields = iconClass.getDeclaredFields();
+                for (java.lang.reflect.Field field : fields) {
+                    if (field.getName().equals("typedIngredient") ||
+                        field.getType().getSimpleName().contains("TypedIngredient")) {
+
+                        field.setAccessible(true);
+                        Object typedIngredient = field.get(icon);
+
+                        if (typedIngredient != null) {
+                            // 调用 getIngredient(VanillaTypes.ITEM_STACK) 方法
+                            try {
+                                java.lang.reflect.Method getIngredientMethod =
+                                    typedIngredient.getClass().getMethod("getIngredient", mezz.jei.api.ingredients.IIngredientType.class);
+
+                                Object ingredientObj = getIngredientMethod.invoke(typedIngredient, VanillaTypes.ITEM_STACK);
+
+                                if (ingredientObj instanceof Optional<?> opt && opt.isPresent()) {
+                                    Object value = opt.get();
+                                    if (value instanceof ItemStack stack && !stack.isEmpty()) {
+                                        EAP$LOGGER.debug("[JEI]     ✓ 从 DrawableIngredient.typedIngredient 提取到: {}",
+                                            stack.getHoverName().getString());
+                                        return stack;
+                                    }
+                                }
+                            } catch (Exception e) {
+                                EAP$LOGGER.debug("[JEI]     获取 ingredient 失败: {}", e.getMessage());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 方式2：尝试通用反射获取 ItemStack 字段（兜底）
+            java.lang.reflect.Field[] fields = iconClass.getDeclaredFields();
+            for (java.lang.reflect.Field field : fields) {
+                // 查找 ItemStack 类型的字段
+                if (field.getType() == ItemStack.class ||
+                    field.getName().toLowerCase().contains("itemstack") ||
+                    field.getName().toLowerCase().contains("stack") ||
+                    field.getName().toLowerCase().contains("item")) {
+
+                    field.setAccessible(true);
+                    Object value = field.get(icon);
+
+                    if (value instanceof ItemStack stack && !stack.isEmpty()) {
+                        EAP$LOGGER.debug("[JEI]     ✓ 从字段 '{}' 提取到 ItemStack: {}",
+                            field.getName(), stack.getHoverName().getString());
+                        return stack;
+                    }
+                }
+
+                // 查找可能是 List<ItemStack> 或 ItemStack[] 的字段
+                if (field.getName().toLowerCase().contains("stacks") ||
+                    field.getName().toLowerCase().contains("items")) {
+
+                    field.setAccessible(true);
+                    Object value = field.get(icon);
+
+                    if (value instanceof List<?> list && !list.isEmpty()) {
+                        Object first = list.get(0);
+                        if (first instanceof ItemStack stack && !stack.isEmpty()) {
+                            EAP$LOGGER.debug("[JEI]     ✓ 从列表字段 '{}' 提取到 ItemStack: {}",
+                                field.getName(), stack.getHoverName().getString());
+                            return stack;
+                        }
+                    }
+
+                    if (value != null && value.getClass().isArray()) {
+                        Object[] arr = (Object[]) value;
+                        if (arr.length > 0 && arr[0] instanceof ItemStack stack && !stack.isEmpty()) {
+                            EAP$LOGGER.debug("[JEI]     ✓ 从数组字段 '{}' 提取到 ItemStack: {}",
+                                field.getName(), stack.getHoverName().getString());
+                            return stack;
+                        }
+                    }
+                }
+            }
+
+            // 方式3：尝试调用可能的 getter 方法
+            Method[] methods = iconClass.getMethods();
+            for (Method method : methods) {
+                if (method.getParameterCount() != 0) {
+                    continue;
+                }
+
+                String methodName = method.getName();
+                // 查找可能返回 ItemStack 的方法
+                if ((methodName.equals("getItemStack") ||
+                     methodName.equals("getStack") ||
+                     methodName.equals("getItem")) &&
+                    method.getReturnType() == ItemStack.class) {
+
+                    Object result = method.invoke(icon);
+                    if (result instanceof ItemStack stack && !stack.isEmpty()) {
+                        EAP$LOGGER.debug("[JEI]     ✓ 从方法 '{}' 提取到 ItemStack: {}",
+                            methodName, stack.getHoverName().getString());
+                        return stack;
+                    }
+                }
+            }
+
+            EAP$LOGGER.debug("[JEI]     ✗ 无法从图标提取 ItemStack");
+
+        } catch (Exception e) {
+            EAP$LOGGER.debug("[JEI] 从图标提取工作方块栈失败: {}", e.getMessage());
+        }
+
+        return ItemStack.EMPTY;
+    }
+
+    /**
+     * 构建工作方块物品到配方类别的映射关系
+     * 策略：优先从图标提取 ItemStack，失败则通过类别标题与物品名称匹配
+     *
+     * @param runtime JEI 运行时
+     * @return Map<Item, Set<ResourceLocation>> 工作方块物品到 JEI 配方类别 UID 的映射
+     */
+    public static Map<net.minecraft.world.item.Item, java.util.Set<ResourceLocation>> buildWorkstationToRecipeTypeMapping(IJeiRuntime runtime) {
+        Map<net.minecraft.world.item.Item, java.util.Set<ResourceLocation>> mapping = new HashMap<>();
+
+        if (runtime == null) {
+            EAP$LOGGER.debug("[JEI] buildWorkstationToRecipeTypeMapping: runtime 为 null");
+            return mapping;
+        }
+
+        EAP$LOGGER.info("[JEI] ========== 开始构建工作方块映射 ==========");
+
+        try {
+            IRecipeManager recipeManager = runtime.getRecipeManager();
+            List<IRecipeCategory<?>> allCategories = recipeManager.createRecipeCategoryLookup().get().toList();
+            EAP$LOGGER.info("[JEI] JEI 总共有 {} 个配方类别", allCategories.size());
+
+            // 第一阶段：尝试从图标提取工作方块
+            Map<ResourceLocation, String> categoryTitles = new HashMap<>();
+            int iconSuccessCount = 0;
+
+            for (int i = 0; i < allCategories.size(); i++) {
+                IRecipeCategory<?> category = allCategories.get(i);
+                try {
+                    mezz.jei.api.recipe.RecipeType<?> jeiRecipeType = category.getRecipeType();
+                    ResourceLocation recipeTypeId = jeiRecipeType.getUid();
+                    Component title = category.getTitle();
+
+                    // 保存标题用于后续名称匹配
+                    if (title != null) {
+                        categoryTitles.put(recipeTypeId, title.getString());
+                    }
+
+                    // 尝试从图标提取
+                    IDrawable icon = category.getIcon();
+                    if (icon != null) {
+                        ItemStack workstationStack = extractWorkstationStackFromIcon(runtime, icon);
+                        if (!workstationStack.isEmpty()) {
+                            net.minecraft.world.item.Item workstationItem = workstationStack.getItem();
+                            mapping.computeIfAbsent(workstationItem, k -> new java.util.HashSet<>())
+                                   .add(recipeTypeId);
+
+                            EAP$LOGGER.info("[JEI]   ✓ [图标提取] 类别[{}] {} -> 工作方块: {}",
+                                i, recipeTypeId, workstationStack.getHoverName().getString());
+                            iconSuccessCount++;
+                        }
+                    }
+
+                } catch (Exception e) {
+                    EAP$LOGGER.debug("[JEI] 处理类别时出错: {}", e.getMessage());
+                }
+            }
+
+            EAP$LOGGER.info("[JEI] 图标提取阶段完成，成功识别 {} 个工作方块", iconSuccessCount);
+
+            // 第二阶段：名称匹配（仅对图标提取失败的类别）
+            if (!categoryTitles.isEmpty()) {
+                EAP$LOGGER.info("[JEI] 开始名称匹配阶段（兜底策略）...");
+                EAP$LOGGER.info("[JEI] 收集到 {} 个类别标题", categoryTitles.size());
+
+                // 获取 JEI 中的所有物品
+                var ingredientManager = runtime.getIngredientManager();
+                var allItemStacks = ingredientManager.getAllItemStacks();
+
+                List<ItemStack> itemList = new ArrayList<>();
+                allItemStacks.forEach(itemList::add);
+
+                EAP$LOGGER.info("[JEI] JEI 中共有 {} 个物品", itemList.size());
+
+                int nameMatchCount = 0;
+
+                for (var entry : categoryTitles.entrySet()) {
+                    ResourceLocation categoryId = entry.getKey();
+                    String categoryTitle = entry.getValue();
+
+                    // 跳过已通过图标识别的类别
+                    boolean alreadyMapped = mapping.values().stream()
+                        .anyMatch(set -> set.contains(categoryId));
+
+                    if (alreadyMapped) {
+                        continue;
+                    }
+
+                    if (categoryTitle == null || categoryTitle.isBlank()) {
+                        continue;
+                    }
+
+                    // 在物品列表中查找名称匹配的物品
+                    for (ItemStack stack : itemList) {
+                        String itemName = stack.getHoverName().getString();
+
+                        // 名称匹配（大小写不敏感，去除空格）
+                        if (itemName.trim().equalsIgnoreCase(categoryTitle.trim())) {
+                            net.minecraft.world.item.Item item = stack.getItem();
+                            mapping.computeIfAbsent(item, k -> new java.util.HashSet<>())
+                                   .add(categoryId);
+
+                            EAP$LOGGER.info("[JEI]   ✓ [名称匹配] '{}' (类别: {}) -> 物品: {}",
+                                categoryTitle, categoryId, item);
+                            nameMatchCount++;
+                            break;
+                        }
+                    }
+                }
+
+                EAP$LOGGER.info("[JEI] 名称匹配阶段完成，额外识别 {} 个工作方块", nameMatchCount);
+            }
+
+        } catch (Exception e) {
+            EAP$LOGGER.error("[JEI] 构建工作方块映射时出错", e);
+        }
+
+        EAP$LOGGER.info("[JEI] ========== 工作方块映射构建完成 ==========");
+        EAP$LOGGER.info("[JEI] 共识别出 {} 个工作方块", mapping.size());
+        for (var entry : mapping.entrySet()) {
+            EAP$LOGGER.info("[JEI]   {} -> {}", entry.getKey(), entry.getValue());
+        }
+
+        return mapping;
+    }
+
+    /**
+     * 构建工作方块到配方类别的映射（带缓存）
+     * 使用 30 秒缓存避免重复遍历 JEI 类别
+     *
+     * @param runtime JEI 运行时
+     * @return 工作方块物品到配方类别 UID 的映射
+     */
+    public static Map<net.minecraft.world.item.Item, java.util.Set<ResourceLocation>> buildWorkstationToRecipeTypeMappingCached(IJeiRuntime runtime) {
+        long now = System.currentTimeMillis();
+
+        // 检查缓存是否有效
+        if (WORKSTATION_MAPPING_CACHE != null && now - CACHE_TIMESTAMP < CACHE_VALIDITY_MS) {
+            long age = now - CACHE_TIMESTAMP;
+            EAP$LOGGER.debug("[JEI] 使用工作方块映射缓存 (年龄: {} ms, 剩余有效期: {} ms)",
+                age, CACHE_VALIDITY_MS - age);
+            return WORKSTATION_MAPPING_CACHE;
+        }
+
+        if (WORKSTATION_MAPPING_CACHE != null) {
+            EAP$LOGGER.debug("[JEI] 工作方块映射缓存已过期，重新构建");
+        } else {
+            EAP$LOGGER.debug("[JEI] 首次构建工作方块映射缓存");
+        }
+
+        // 重建缓存
+        Map<net.minecraft.world.item.Item, java.util.Set<ResourceLocation>> mapping = buildWorkstationToRecipeTypeMapping(runtime);
+        WORKSTATION_MAPPING_CACHE = mapping;
+        CACHE_TIMESTAMP = now;
+
+        EAP$LOGGER.info("[JEI] 工作方块映射缓存已更新，包含 {} 个工作方块", mapping.size());
+
+        return mapping;
     }
 }
