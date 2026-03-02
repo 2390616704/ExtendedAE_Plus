@@ -794,8 +794,6 @@ public final class RecipeTypeNameConfig {
                             mapping.computeIfAbsent(workstationItem, k -> new java.util.HashSet<>())
                                    .add(recipeTypeId);
 
-                            EAP$LOGGER.info("[JEI]   ✓ [图标提取] 类别[{}] {} -> 工作方块: {}",
-                                i, recipeTypeId, workstationStack.getHoverName().getString());
                             iconSuccessCount++;
                         }
                     }
@@ -807,58 +805,6 @@ public final class RecipeTypeNameConfig {
 
             EAP$LOGGER.info("[JEI] 图标提取阶段完成，成功识别 {} 个工作方块", iconSuccessCount);
 
-            // 第二阶段：名称匹配（仅对图标提取失败的类别）
-            if (!categoryTitles.isEmpty()) {
-                EAP$LOGGER.info("[JEI] 开始名称匹配阶段（兜底策略）...");
-                EAP$LOGGER.info("[JEI] 收集到 {} 个类别标题", categoryTitles.size());
-
-                // 获取 JEI 中的所有物品
-                var ingredientManager = runtime.getIngredientManager();
-                var allItemStacks = ingredientManager.getAllItemStacks();
-
-                List<ItemStack> itemList = new ArrayList<>();
-                allItemStacks.forEach(itemList::add);
-
-                EAP$LOGGER.info("[JEI] JEI 中共有 {} 个物品", itemList.size());
-
-                int nameMatchCount = 0;
-
-                for (var entry : categoryTitles.entrySet()) {
-                    ResourceLocation categoryId = entry.getKey();
-                    String categoryTitle = entry.getValue();
-
-                    // 跳过已通过图标识别的类别
-                    boolean alreadyMapped = mapping.values().stream()
-                        .anyMatch(set -> set.contains(categoryId));
-
-                    if (alreadyMapped) {
-                        continue;
-                    }
-
-                    if (categoryTitle == null || categoryTitle.isBlank()) {
-                        continue;
-                    }
-
-                    // 在物品列表中查找名称匹配的物品
-                    for (ItemStack stack : itemList) {
-                        String itemName = stack.getHoverName().getString();
-
-                        // 名称匹配（大小写不敏感，去除空格）
-                        if (itemName.trim().equalsIgnoreCase(categoryTitle.trim())) {
-                            net.minecraft.world.item.Item item = stack.getItem();
-                            mapping.computeIfAbsent(item, k -> new java.util.HashSet<>())
-                                   .add(categoryId);
-
-                            EAP$LOGGER.info("[JEI]   ✓ [名称匹配] '{}' (类别: {}) -> 物品: {}",
-                                categoryTitle, categoryId, item);
-                            nameMatchCount++;
-                            break;
-                        }
-                    }
-                }
-
-                EAP$LOGGER.info("[JEI] 名称匹配阶段完成，额外识别 {} 个工作方块", nameMatchCount);
-            }
 
         } catch (Exception e) {
             EAP$LOGGER.error("[JEI] 构建工作方块映射时出错", e);
@@ -866,9 +812,6 @@ public final class RecipeTypeNameConfig {
 
         EAP$LOGGER.info("[JEI] ========== 工作方块映射构建完成 ==========");
         EAP$LOGGER.info("[JEI] 共识别出 {} 个工作方块", mapping.size());
-        for (var entry : mapping.entrySet()) {
-            EAP$LOGGER.info("[JEI]   {} -> {}", entry.getKey(), entry.getValue());
-        }
 
         return mapping;
     }

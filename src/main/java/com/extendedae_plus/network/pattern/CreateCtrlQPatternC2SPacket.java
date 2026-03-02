@@ -243,7 +243,24 @@ public class CreateCtrlQPatternC2SPacket {
 
     private static ItemStack createPattern(Recipe<?> recipe, boolean isCrafting, List<ItemStack> selectedIngredients, List<ItemStack> selectedOutputs, ServerPlayer player) {
         try {
+            LOGGER.info("[CreatePattern] ==================== 开始创建样板 ====================");
+            LOGGER.info("[CreatePattern] 配方ID: {}", recipe.getId());
+            LOGGER.info("[CreatePattern] 配方类型: {}", isCrafting ? "工作台配方" : "加工配方");
+            LOGGER.info("[CreatePattern] selectedIngredients数量: {}", selectedIngredients.size());
+            LOGGER.info("[CreatePattern] selectedOutputs数量: {}", selectedOutputs.size());
+
+            // 打印接收到的材料
+            for (int i = 0; i < selectedIngredients.size(); i++) {
+                ItemStack item = selectedIngredients.get(i);
+                LOGGER.info("[CreatePattern]   材料[{}]: {}", i, item);
+            }
+            for (int i = 0; i < selectedOutputs.size(); i++) {
+                ItemStack item = selectedOutputs.get(i);
+                LOGGER.info("[CreatePattern]   产物[{}]: {}", i, item);
+            }
+
             if (isCrafting && recipe instanceof CraftingRecipe craftingRecipe) {
+                LOGGER.info("[CreatePattern] 处理工作台配方");
                 ItemStack[] inputs = new ItemStack[9];
                 for (int i = 0; i < 9; i++) {
                     if (i < selectedIngredients.size()) {
@@ -264,44 +281,64 @@ public class CreateCtrlQPatternC2SPacket {
 
                 encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
                 addRecipeTypeSuffixToPattern(encodedPattern, recipe, output);
+                LOGGER.info("[CreatePattern] 工作台样板创建完成");
                 return encodedPattern;
             }
 
+            LOGGER.info("[CreatePattern] 处理加工配方，开始转换ItemStack到GenericStack");
             List<GenericStack> inputs = new ArrayList<>();
             List<GenericStack> outputs = new ArrayList<>();
 
-            for (ItemStack item : selectedIngredients) {
+            // 转换输入材料
+            for (int i = 0; i < selectedIngredients.size(); i++) {
+                ItemStack item = selectedIngredients.get(i);
                 if (!item.isEmpty()) {
                     GenericStack genericStack = GenericStack.unwrapItemStack(item);
                     if (genericStack != null) {
+                        // 这是包装的流体
                         inputs.add(genericStack);
+                        LOGGER.info("[CreatePattern]   材料[{}] unwrap -> 流体: {}", i, genericStack);
                     } else {
+                        // 这是普通物品
                         AEItemKey itemKey = AEItemKey.of(item);
                         if (itemKey != null) {
-                            inputs.add(new GenericStack(itemKey, item.getCount()));
+                            GenericStack itemGeneric = new GenericStack(itemKey, item.getCount());
+                            inputs.add(itemGeneric);
+                            LOGGER.info("[CreatePattern]   材料[{}] -> 物品: {}", i, itemGeneric);
                         }
                     }
                 }
             }
 
-            for (ItemStack item : selectedOutputs) {
+            // 转换输出产物
+            for (int i = 0; i < selectedOutputs.size(); i++) {
+                ItemStack item = selectedOutputs.get(i);
                 if (!item.isEmpty()) {
                     GenericStack genericStack = GenericStack.unwrapItemStack(item);
                     if (genericStack != null) {
+                        // 这是包装的流体
                         outputs.add(genericStack);
+                        LOGGER.info("[CreatePattern]   产物[{}] unwrap -> 流体: {}", i, genericStack);
                     } else {
+                        // 这是普通物品
                         AEItemKey itemKey = AEItemKey.of(item);
                         if (itemKey != null) {
-                            outputs.add(new GenericStack(itemKey, item.getCount()));
+                            GenericStack itemGeneric = new GenericStack(itemKey, item.getCount());
+                            outputs.add(itemGeneric);
+                            LOGGER.info("[CreatePattern]   产物[{}] -> 物品: {}", i, itemGeneric);
                         }
                     }
                 }
             }
+
+            LOGGER.info("[CreatePattern] 转换完成：inputs={} 个, outputs={} 个", inputs.size(), outputs.size());
 
             ItemStack encodedPattern = PatternDetailsHelper.encodeProcessingPattern(
                 inputs.toArray(new GenericStack[0]),
                 outputs.toArray(new GenericStack[0])
             );
+
+            LOGGER.info("[CreatePattern] 加工样板编码完成");
 
             encodedPattern.getOrCreateTag().putString("encodePlayer", player.getName().getString());
 
@@ -350,7 +387,7 @@ public class CreateCtrlQPatternC2SPacket {
             String itemName = outputItem.getHoverName().getString();
             if (itemName == null || itemName.isBlank()) {
                 itemName = outputItem.getDisplayName().getString();
-                LOGGER.debug("[CTRL+Q] 使用 displayName：{}", itemName);
+                LOGGER.info("[CTRL+Q] 使用 displayName：{}", itemName);
             }
 
             if (itemName == null || itemName.isBlank()) {
@@ -365,7 +402,7 @@ public class CreateCtrlQPatternC2SPacket {
 
             // 验证是否设置成功
             String finalName = pattern.getHoverName().getString();
-            LOGGER.debug("[CTRL+Q] 验证样板名称：设置前={}, 设置后={}", itemName, finalName);
+            LOGGER.info("[CTRL+Q] 验证样板名称：设置前={}, 设置后={}", itemName, finalName);
 
         } catch (Exception e) {
             LOGGER.error("[CTRL+Q] 添加工作方块后缀时发生异常", e);

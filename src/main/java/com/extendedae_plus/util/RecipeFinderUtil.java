@@ -146,7 +146,7 @@ public class RecipeFinderUtil {
             ingredientDesc = ingredient.toString();
         }
 
-        LOGGER.debug("[RecipeFinder] Found {} recipes for output: {}", results.size(), ingredientDesc);
+        LOGGER.info("[RecipeFinder] Found {} recipes for output: {}", results.size(), ingredientDesc);
 
         return results;
     }
@@ -171,10 +171,18 @@ public class RecipeFinderUtil {
         boolean isCrafting
     ) {
         try {
+            LOGGER.info("[RecipeFinder] ==================== 开始提取配方信息 ====================");
+            LOGGER.info("[RecipeFinder] 配方ID: {}", recipe.getId());
+            LOGGER.info("[RecipeFinder] 配方类型: {}", isCrafting ? "工作台配方" : "加工配方");
+
             // ========== 第一步：从 Recipe 对象提取物品输入（最准确） ==========
             List<List<GenericStack>> inputs = new ArrayList<>();
 
-            for (net.minecraft.world.item.crafting.Ingredient ingredient : recipe.getIngredients()) {
+            List<net.minecraft.world.item.crafting.Ingredient> ingredients = recipe.getIngredients();
+            LOGGER.info("[RecipeFinder] 第一步：从Recipe API提取物品输入，Ingredient数量: {}", ingredients.size());
+
+            int ingredientIndex = 0;
+            for (net.minecraft.world.item.crafting.Ingredient ingredient : ingredients) {
                 List<GenericStack> slotStacks = new ArrayList<>();
 
                 // 将 Ingredient 的所有可能物品转换为 GenericStack
@@ -183,38 +191,115 @@ public class RecipeFinderUtil {
                         AEItemKey itemKey = AEItemKey.of(itemStack);
                         if (itemKey != null) {
                             slotStacks.add(new GenericStack(itemKey, itemStack.getCount()));
+                            LOGGER.info("[RecipeFinder]   Ingredient[{}] - 物品: {} x{}",
+                                ingredientIndex, itemKey.getItem(), itemStack.getCount());
                         }
                     }
                 }
 
                 inputs.add(slotStacks);
+                ingredientIndex++;
             }
 
-            // ========== 第二步：从 JEI 布局提取流体输入（Recipe API 不支持） ==========
+            LOGGER.info("[RecipeFinder] 第一步完成：提取了 {} 个物品输入槽位", inputs.size());
+
+            // ========== 第二步：从 JEI 布局提取缺失的数据（物品+流体） ==========
+            // 重要说明：
+            // - 某些配方类型（如 ReactionChamberRecipe）的 getIngredients() 返回空列表
+            // - 此时物品数据只在 JEI 布局中，必须从 JEI 提取物品
+            // - 如果 Recipe API 已提供物品，则只需要从 JEI 提取流体并合并
             IRecipeSlotsView slotsView = layout.getRecipeSlotsView();
             List<IRecipeSlotView> inputSlots = slotsView.getSlotViews(RecipeIngredientRole.INPUT);
+            boolean recipeApiHasItems = !ingredients.isEmpty();
 
-            for (IRecipeSlotView slot : inputSlots) {
-                List<GenericStack> fluidStacks = new ArrayList<>();
+            LOGGER.info("[RecipeFinder] 第二步：从JEI布局提取输入数据，JEI输入槽位数量: {}", inputSlots.size());
+            LOGGER.info("[RecipeFinder]   Recipe API提供了物品: {}", recipeApiHasItems);
 
-                // 只提取流体（物品已从 Recipe 获取）
-                for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
-                    if (typedIngredient.getType() == ForgeTypes.FLUID_STACK) {
-                        FluidStack fluidStack = (FluidStack) typedIngredient.getIngredient();
-                        if (!fluidStack.isEmpty()) {
-                            AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
-                            if (fluidKey != null) {
-                                fluidStacks.add(new GenericStack(fluidKey, fluidStack.getAmount()));
+            if (recipeApiHasItems) {
+                // Recipe API 有物品数据：只需从 JEI 提取流体并合并到对应槽位
+                LOGGER.info("[RecipeFinder]   策略：按索引合并JEI流体到Recipe API的物品槽位");
+
+                for (int i = 0; i < inputSlots.size(); i++) {
+                    IRecipeSlotView slot = inputSlots.get(i);
+
+                    // 提取流体
+                    List<GenericStack> fluids = new ArrayList<>();
+                    for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
+                        if (typedIngredient.getType() == ForgeTypes.FLUID_STACK) {
+                            FluidStack fluidStack = (FluidStack) typedIngredient.getIngredient();
+                            if (!fluidStack.isEmpty()) {
+                                AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
+                                if (fluidKey != null) {
+                                    fluids.add(new GenericStack(fluidKey, fluidStack.getAmount()));
+                                    LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 流体: {} x{}",
+                                        i, fluidKey.getFluid(), fluidStack.getAmount());
+                                }
                             }
                         }
                     }
-                }
 
-                // 如果这个槽位有流体，添加到 inputs
-                if (!fluidStacks.isEmpty()) {
-                    inputs.add(fluidStacks);
+                    // 合并流体到对应索引的槽位（如果存在）
+                    if (!fluids.isEmpty()) {
+                        if (i < inputs.size()) {
+                            // 合并到已存在的槽位
+                            inputs.get(i).addAll(fluids);
+                            LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 合并 {} 个流体到inputs[{}]",
+                                i, fluids.size(), i);
+                        } else {
+                            // 新增槽位
+                            inputs.add(fluids);
+                            LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 新增流体槽位到inputs", i);
+                        }
+                    }
+                }
+            } else {
+                // Recipe API 无物品数据：完全依赖 JEI 提取所有数据（物品+流体）
+                LOGGER.info("[RecipeFinder]   策略：完全从JEI布局提取所有输入数据");
+
+                for (int i = 0; i < inputSlots.size(); i++) {
+                    IRecipeSlotView slot = inputSlots.get(i);
+                    List<GenericStack> slotData = new ArrayList<>();
+
+                    // 提取所有类型（物品+流体）
+                    for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
+                        if (typedIngredient.getType() == VanillaTypes.ITEM_STACK) {
+                            // 提取物品
+                            net.minecraft.world.item.ItemStack itemStack =
+                                (net.minecraft.world.item.ItemStack) typedIngredient.getIngredient();
+                            if (!itemStack.isEmpty()) {
+                                AEItemKey itemKey = AEItemKey.of(itemStack);
+                                if (itemKey != null) {
+                                    slotData.add(new GenericStack(itemKey, itemStack.getCount()));
+                                    LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 物品: {} x{}",
+                                        i, itemKey.getItem(), itemStack.getCount());
+                                }
+                            }
+                        } else if (typedIngredient.getType() == ForgeTypes.FLUID_STACK) {
+                            // 提取流体
+                            FluidStack fluidStack = (FluidStack) typedIngredient.getIngredient();
+                            if (!fluidStack.isEmpty()) {
+                                AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
+                                if (fluidKey != null) {
+                                    slotData.add(new GenericStack(fluidKey, fluidStack.getAmount()));
+                                    LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 流体: {} x{}",
+                                        i, fluidKey.getFluid(), fluidStack.getAmount());
+                                }
+                            }
+                        }
+                    }
+
+                    // 添加槽位（即使为空也要添加，保持索引对应）
+                    if (!slotData.isEmpty()) {
+                        inputs.add(slotData);
+                        LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 添加到inputs（物品+流体共{}个）",
+                            i, slotData.size());
+                    } else {
+                        LOGGER.info("[RecipeFinder]   JEI槽位[{}] - 空槽位，跳过", i);
+                    }
                 }
             }
+
+            LOGGER.info("[RecipeFinder] 第二步完成：总inputs槽位数: {}", inputs.size());
 
             // ========== 第三步：从 Recipe 对象提取物品输出（最准确） ==========
             List<GenericStack> outputs = new ArrayList<>();
@@ -224,12 +309,18 @@ public class RecipeFinderUtil {
                 AEItemKey itemKey = AEItemKey.of(resultItem);
                 if (itemKey != null) {
                     outputs.add(new GenericStack(itemKey, resultItem.getCount()));
+                    LOGGER.info("[RecipeFinder] 第三步：从Recipe API提取物品输出: {} x{}",
+                        itemKey.getItem(), resultItem.getCount());
                 }
+            } else {
+                LOGGER.info("[RecipeFinder] 第三步：Recipe API无物品输出");
             }
 
             // ========== 第四步：从 JEI 布局提取流体输出（Recipe API 不支持） ==========
             List<IRecipeSlotView> outputSlots = slotsView.getSlotViews(RecipeIngredientRole.OUTPUT);
+            LOGGER.info("[RecipeFinder] 第四步：从JEI布局提取流体输出，JEI输出槽位数量: {}", outputSlots.size());
 
+            int outputSlotIndex = 0;
             for (IRecipeSlotView slot : outputSlots) {
                 // 只提取流体（物品已从 Recipe 获取）
                 for (ITypedIngredient<?> typedIngredient : slot.getAllIngredients().toList()) {
@@ -239,9 +330,36 @@ public class RecipeFinderUtil {
                             AEFluidKey fluidKey = AEFluidKey.of(fluidStack);
                             if (fluidKey != null) {
                                 outputs.add(new GenericStack(fluidKey, fluidStack.getAmount()));
+                                LOGGER.info("[RecipeFinder]   输出槽位[{}] - 流体: {} x{}",
+                                    outputSlotIndex, fluidKey.getFluid(), fluidStack.getAmount());
                             }
                         }
                     }
+                }
+                outputSlotIndex++;
+            }
+
+            LOGGER.info("[RecipeFinder] 第四步完成：总outputs数量: {}", outputs.size());
+
+            LOGGER.info("[RecipeFinder] ==================== RecipeInfo创建完成 ====================");
+            LOGGER.info("[RecipeFinder] 最终inputs槽位数: {}", inputs.size());
+            for (int i = 0; i < inputs.size(); i++) {
+                List<GenericStack> slot = inputs.get(i);
+                LOGGER.info("[RecipeFinder]   inputs[{}]: {} 个选项", i, slot.size());
+                for (GenericStack stack : slot) {
+                    if (stack.what() instanceof AEItemKey itemKey) {
+                        LOGGER.info("[RecipeFinder]     - 物品: {} x{}", itemKey.getItem(), stack.amount());
+                    } else if (stack.what() instanceof AEFluidKey fluidKey) {
+                        LOGGER.info("[RecipeFinder]     - 流体: {} x{}", fluidKey.getFluid(), stack.amount());
+                    }
+                }
+            }
+            LOGGER.info("[RecipeFinder] 最终outputs数量: {}", outputs.size());
+            for (GenericStack stack : outputs) {
+                if (stack.what() instanceof AEItemKey itemKey) {
+                    LOGGER.info("[RecipeFinder]   - 物品: {} x{}", itemKey.getItem(), stack.amount());
+                } else if (stack.what() instanceof AEFluidKey fluidKey) {
+                    LOGGER.info("[RecipeFinder]   - 流体: {} x{}", fluidKey.getFluid(), stack.amount());
                 }
             }
 
@@ -319,29 +437,29 @@ public class RecipeFinderUtil {
      * @return 匹配收藏工作方块的配方，如果没有匹配则返回 null
      */
     private static RecipeInfo selectRecipeByBookmarkedWorkstation(List<RecipeInfo> recipes) {
-        LOGGER.debug("[RecipeFinder] >> 进入 selectRecipeByBookmarkedWorkstation");
+        LOGGER.info("[RecipeFinder] >> 进入 selectRecipeByBookmarkedWorkstation");
 
         // 1. 获取 JEI Runtime
         IJeiRuntime runtime = JeiRuntimeProxy.get();
         if (runtime == null) {
-            LOGGER.debug("[RecipeFinder] << JEI Runtime 未初始化，返回 null");
+            LOGGER.info("[RecipeFinder] << JEI Runtime 未初始化，返回 null");
             return null;
         }
-        LOGGER.debug("[RecipeFinder] JEI Runtime 已就绪");
+        LOGGER.info("[RecipeFinder] JEI Runtime 已就绪");
 
         // 2. 构建工作方块到配方类别的映射（使用缓存）
-        LOGGER.debug("[RecipeFinder] 正在构建工作方块映射...");
+        LOGGER.info("[RecipeFinder] 正在构建工作方块映射...");
         java.util.Map<net.minecraft.world.item.Item, Set<ResourceLocation>> workstationMapping =
             RecipeTypeNameConfig.buildWorkstationToRecipeTypeMappingCached(runtime);
 
         if (workstationMapping.isEmpty()) {
-            LOGGER.debug("[RecipeFinder] << 工作方块映射为空，返回 null");
+            LOGGER.info("[RecipeFinder] << 工作方块映射为空，返回 null");
             return null;
         }
         LOGGER.info("[RecipeFinder] 工作方块映射包含 {} 个工作方块", workstationMapping.size());
 
         // 3. 获取玩家收藏的所有物品
-        LOGGER.debug("[RecipeFinder] 正在获取玩家收藏的物品...");
+        LOGGER.info("[RecipeFinder] 正在获取玩家收藏的物品...");
         List<ItemStack> bookmarkedItems = RecipeTypeNameConfig.getBookmarkedWorkstations();
 
         if (bookmarkedItems.isEmpty()) {
@@ -351,25 +469,25 @@ public class RecipeFinderUtil {
         LOGGER.info("[RecipeFinder] 玩家收藏了 {} 个物品", bookmarkedItems.size());
 
         // 4. 构建配方类别优先级列表（按收藏顺序）
-        LOGGER.debug("[RecipeFinder] 正在构建配方类别优先级列表...");
+        LOGGER.info("[RecipeFinder] 正在构建配方类别优先级列表...");
         List<ResourceLocation> priorityCategories = new ArrayList<>();
 
         for (ItemStack stack : bookmarkedItems) {
             net.minecraft.world.item.Item item = stack.getItem();
             if (workstationMapping.containsKey(item)) {
                 Set<ResourceLocation> categories = workstationMapping.get(item);
-                LOGGER.debug("[RecipeFinder]   工作方块 {} 支持类别: {}", item, categories);
+                LOGGER.info("[RecipeFinder]   工作方块 {} 支持类别: {}", item, categories);
 
                 // 将该工作方块支持的所有类别添加到优先级列表（保持顺序，避免重复）
                 for (ResourceLocation category : categories) {
                     if (!priorityCategories.contains(category)) {
                         priorityCategories.add(category);
-                        LOGGER.debug("[RecipeFinder]   添加类别到优先级列表[位置 {}]: {}",
+                        LOGGER.info("[RecipeFinder]   添加类别到优先级列表[位置 {}]: {}",
                             priorityCategories.size() - 1, category);
                     }
                 }
             } else {
-                LOGGER.debug("[RecipeFinder]   ✗ {} 不是工作方块，跳过", item);
+               // LOGGER.info("[RecipeFinder]   ✗ {} 不是工作方块，跳过", item);
             }
         }
 
@@ -384,7 +502,7 @@ public class RecipeFinderUtil {
         }
 
         // 5. 为每个候选配方计算优先级，选择优先级最高的
-        LOGGER.debug("[RecipeFinder] 开始为候选配方计算优先级...");
+        LOGGER.info("[RecipeFinder] 开始为候选配方计算优先级...");
         RecipeInfo bestRecipe = null;
         int bestPriority = Integer.MAX_VALUE;
 
@@ -393,21 +511,21 @@ public class RecipeFinderUtil {
             Recipe<?> recipe = recipeInfo.getRecipe();
 
             // 获取配方所属的 JEI 类别 UID
-            LOGGER.debug("[RecipeFinder]   [配方 {}] 正在查询类别: {}", i, recipe.getId());
+            LOGGER.info("[RecipeFinder]   [配方 {}] 正在查询类别: {}", i, recipe.getId());
             ResourceLocation recipeCategory = getRecipeTypeId(runtime, recipe);
 
             if (recipeCategory == null) {
-                LOGGER.debug("[RecipeFinder]   [配方 {}] 没有对应的 JEI 类别，跳过", i);
+                LOGGER.info("[RecipeFinder]   [配方 {}] 没有对应的 JEI 类别，跳过", i);
                 continue;
             }
 
-            LOGGER.debug("[RecipeFinder]   [配方 {}] 类别: {}", i, recipeCategory);
+            LOGGER.info("[RecipeFinder]   [配方 {}] 类别: {}", i, recipeCategory);
 
             // 查找该类别在优先级列表中的位置
             int priority = priorityCategories.indexOf(recipeCategory);
 
             if (priority == -1) {
-                LOGGER.debug("[RecipeFinder]   [配方 {}] 类别 {} 不在优先级列表中，跳过", i, recipeCategory);
+                LOGGER.info("[RecipeFinder]   [配方 {}] 类别 {} 不在优先级列表中，跳过", i, recipeCategory);
                 continue;
             }
 
@@ -442,16 +560,16 @@ public class RecipeFinderUtil {
      */
     private static ResourceLocation getRecipeTypeId(IJeiRuntime runtime, Recipe<?> recipe) {
         if (runtime == null || recipe == null) {
-            LOGGER.debug("[RecipeFinder]     getRecipeTypeId: runtime 或 recipe 为 null");
+            LOGGER.info("[RecipeFinder]     getRecipeTypeId: runtime 或 recipe 为 null");
             return null;
         }
 
-        LOGGER.debug("[RecipeFinder]     >> 查找配方 {} 的类别 UID", recipe.getId());
+        LOGGER.info("[RecipeFinder]     >> 查找配方 {} 的类别 UID", recipe.getId());
 
         try {
             IRecipeManager recipeManager = runtime.getRecipeManager();
             List<IRecipeCategory<?>> allCategories = recipeManager.createRecipeCategoryLookup().get().toList();
-            LOGGER.debug("[RecipeFinder]     JEI 总共有 {} 个配方类别", allCategories.size());
+            LOGGER.info("[RecipeFinder]     JEI 总共有 {} 个配方类别", allCategories.size());
 
             int categoryIndex = 0;
             for (IRecipeCategory<?> category : allCategories) {
@@ -464,27 +582,26 @@ public class RecipeFinderUtil {
                         .get()
                         .toList();
 
-                    LOGGER.debug("[RecipeFinder]     检查类别[{}]: {} (包含 {} 个配方)",
-                        categoryIndex++, categoryUid, recipesInCategory.size());
+
 
                     // 检查当前配方是否在此类别中
                     for (Object recipeObj : recipesInCategory) {
                         if (recipeObj == recipe ||
                             (recipeObj instanceof Recipe<?> r && r.getId().equals(recipe.getId()))) {
-                            LOGGER.debug("[RecipeFinder]     << ✓ 找到! 配方属于类别: {}", categoryUid);
+                            LOGGER.info("[RecipeFinder]     << ✓ 找到! 配方属于类别: {}", categoryUid);
                             return categoryUid;
                         }
                     }
 
                 } catch (Exception e) {
-                    LOGGER.debug("[RecipeFinder]     类别检查出错: {}", e.getMessage());
+                    LOGGER.info("[RecipeFinder]     类别检查出错: {}", e.getMessage());
                 }
             }
 
-            LOGGER.debug("[RecipeFinder]     << 未找到配方对应的类别");
+            LOGGER.info("[RecipeFinder]     << 未找到配方对应的类别");
 
         } catch (Exception e) {
-            LOGGER.debug("[RecipeFinder] 获取配方类别 UID 时出错: {}", e.getMessage());
+            LOGGER.info("[RecipeFinder] 获取配方类别 UID 时出错: {}", e.getMessage());
         }
 
         return null;
